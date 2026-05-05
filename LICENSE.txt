@@ -1,0 +1,57 @@
+PortoWrite — Software Licence
+=============================
+Copyright (c) 2026 Porto Labs (portowlabs@gmail.com)
+All rights reserved.
+
+-------------------------------------------------------------------------------
+1. PERSONAL / NON-COMMERCIAL USE (Free)
+-------------------------------------------------------------------------------
+Permission is granted, free of charge, to any individual to use this software
+for personal, non-commercial purposes, subject to the following conditions:
+
+  a. The above copyright notice and this licence notice must be included in
+     all copies or substantial portions of the software.
+  b. The software may not be redistributed, sublicensed, sold, or made
+     available to others without the express written permission of the
+     copyright holder.
+  c. Modifications made for personal use are permitted, but modified versions
+     may not be distributed, published, or shared without a separate written
+     agreement.
+
+-------------------------------------------------------------------------------
+2. SUPPORTER TIER
+-------------------------------------------------------------------------------
+A Supporter licence key, issued via donation, removes the beta nag screen and
+displays a "Supporter" badge. The Supporter licence is personal,
+non-transferable, and does not grant commercial use rights.
+
+-------------------------------------------------------------------------------
+3. COMMERCIAL USE
+-------------------------------------------------------------------------------
+Commercial use requires a paid commercial licence. Commercial use means use
+within a business, organisation, or any revenue-generating context, including
+use in work performed for clients, customers, or employers.
+
+To obtain a commercial licence, contact:
+portowlabs@gmail.com
+
+Each commercial licence is issued to a named individual or organisation and is
+non-transferable without written permission.
+
+-------------------------------------------------------------------------------
+4. REDISTRIBUTION
+-------------------------------------------------------------------------------
+Redistribution of this software, in source or binary form, with or without
+modification, is not permitted without express written permission from the
+copyright holder.
+
+-------------------------------------------------------------------------------
+5. DISCLAIMER
+-------------------------------------------------------------------------------
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
