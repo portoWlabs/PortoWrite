@@ -3,30 +3,36 @@ import os
 from datetime import datetime
 from PySide6.QtWidgets import (
     QMainWindow, QLabel, QMenu, QMessageBox, QDockWidget,
-    QDialog, QFileDialog, QSplitter, QApplication
+    QDialog, QFileDialog, QSplitter, QApplication, QToolBar,
+    QWidget, QSizePolicy
 )
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QColor, QPalette, QFont
-from porto_write.epub_io import export_epub, import_epub
-from porto_write.md_io import export_md, import_md
-from porto_write.docx_io import export_docx, import_docx
 from PySide6.QtCore import QTimer, Qt
-from porto_write.constants import APP_NAME, APP_VERSION, KINDLE_FONTS, STYLE_NAME_PROPERTY
+
+from porto_write.constants import APP_NAME, APP_VERSION, KINDLE_FONTS, STYLE_NAME_PROPERTY, DEVICE_PROFILES, DEFAULT_DEVICE
 from porto_write.logger import setup_logging
 from porto_write.settings import AppSettings
 from porto_write.project import NovelProject
 from porto_write.spell import SpellChecker
-from porto_write.ui.editor_widget import EditorWidget, SpellCheckHighlighter
+from porto_write.ui.editor_widget import EditorWidget
+from porto_write.ui.spell_highlighter import SpellCheckHighlighter
 from porto_write.ui.style_panel import StylePanel
 from porto_write.ui.chapter_sidebar import ChapterSidebar
 from porto_write.ui.toolbar import EditorToolbar
 from porto_write.ui.dialogs import DisplayPreferencesDialog, FindReplaceDialog, AboutDialog, UpgradeDialog
 from porto_write.ui.dialogs.licence_key_dialog import LicenceKeyDialog
 from porto_write.ui.kindle_preview import KindlePreviewWidget, KINDLE_THEMES
+from porto_write.ui.ebook_frame import EbookFrameWidget
 from porto_write.licensing import is_pro, is_commercial, get_edition_label, get_edition, Edition, deactivate_licence
+
+from porto_write.ui.project_mixin import ProjectActionsMixin
+from porto_write.ui.export_mixin import ExportImportMixin
+from porto_write.ui.preview_mixin import PreviewMixin
+from porto_write.ui.style_mixin import StyleMixin
 
 logger = logging.getLogger(__name__)
 
-class MainWindow(QMainWindow):
+class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixin, QMainWindow):
     """Main application shell for PortoWrite."""
 
     def __init__(self, settings: AppSettings, project: NovelProject):
@@ -53,6 +59,9 @@ class MainWindow(QMainWindow):
         self.preview_timer.timeout.connect(self._update_preview)
 
         self._find_replace_dlg = None
+        self._ebook_theme_actions = {}
+        self._system_palette = QApplication.instance().palette()
+        self._system_style_name = QApplication.instance().style().objectName()
         self._setup_ui()
 
         # Typing Timer + Idle Detection (must be before signal connections)
@@ -71,6 +80,7 @@ class MainWindow(QMainWindow):
             self.editor.set_spell_checker(self.spell_checker)
             # Highlighter needs a strong reference to stay alive in PySide
             self.highlighter = SpellCheckHighlighter(self.editor.document(), self.spell_checker)
+            self.editor.set_highlighter(self.highlighter)
         except Exception as e:
             logger.error(f"Failed to initialize spelling services: {e}")
             self.spell_checker = None
@@ -82,12 +92,14 @@ class MainWindow(QMainWindow):
         self.editor.zoom_changed.connect(self._on_zoom_changed)
         self.editor.stats_changed.connect(self._update_stats_display)
         self.editor.structure_changed.connect(self._on_structure_changed)
+        self.editor.active_chapter_changed.connect(self.chapter_sidebar.select_chapter)
         self.style_panel.style_selected.connect(self.editor.apply_style)
         self.style_panel.style_added.connect(self._on_style_added)
         self.style_panel.style_updated.connect(self._on_style_updated)
         self.style_panel.style_deleted.connect(self._on_style_deleted)
         self.chapter_sidebar.chapter_selected.connect(self.editor.scroll_to_chapter)
         self.editor.style_updated.connect(self._on_style_updated)
+        self.preview.block_clicked.connect(self._on_preview_block_clicked)
         
         # Setup Auto-Save Timer
         self.autosave_timer = QTimer(self)
@@ -105,6 +117,10 @@ class MainWindow(QMainWindow):
         self.toolbar.undo_action.triggered.connect(self.editor.undo)
         self.toolbar.redo_action.triggered.connect(self.editor.redo)
         self.toolbar.style_combo.activated.connect(self._on_toolbar_style_selected)
+        self.toolbar.preview_action.triggered.connect(self._on_reader_preview_toggled)
+        self.toolbar.ebook_mode_action.triggered.connect(self._on_ebook_mode_toggled)
+        self.toolbar.page_break_action.triggered.connect(self.editor.insert_page_break)
+        self.toolbar.scene_break_action.triggered.connect(self.editor.insert_scene_break)
         
         # Style Hotkeys from editor
         self.editor.style_hotkey_triggered.connect(self._on_style_hotkey)
@@ -115,6 +131,7 @@ class MainWindow(QMainWindow):
         # Apply display preferences
         self._apply_display_preferences()
         self._apply_tooltips_preference()
+        self._apply_app_theme(self.settings.app_theme)
 
         # Load initial project
         self._load_project(self.project)
@@ -133,38 +150,6 @@ class MainWindow(QMainWindow):
     def _update_title(self):
         dirty_indicator = "*" if self.is_dirty else ""
         self.setWindowTitle(f"{self.project.doc.title}{dirty_indicator} — {APP_NAME} v{APP_VERSION}")
-
-    def _on_reader_preview_toggled(self, checked: bool):
-        """Show/Hide the simulated Kindle preview panel."""
-        self.preview.setVisible(checked)
-        if checked:
-            self._update_preview()
-
-    def _on_preview_theme_changed(self):
-        """Switch the theme of the Kindle previewer."""
-        action = self.sender()
-        if action:
-            self.preview.set_theme(action.data())
-
-    def _update_preview(self):
-        """Trigger re-rendering of the Kindle preview from current editor state."""
-        if not self.preview.isVisible():
-            return
-        
-        # Sync editor content to project document first
-        self.editor.sync_to_document(self.project.doc)
-        self.preview.update_preview(self.project.doc)
-        # Re-sync scroll after content update
-        self._sync_preview_scroll()
-
-    def _sync_preview_scroll(self):
-        if not self.preview.isVisible():
-            return
-        
-        sb = self.editor.verticalScrollBar()
-        if sb.maximum() > 0:
-            percentage = sb.value() / sb.maximum()
-            self.preview.set_scroll_percentage(percentage)
 
     def _on_text_changed(self):
         if self._loading:
@@ -185,53 +170,9 @@ class MainWindow(QMainWindow):
             self.preview_timer.start()
 
     def _update_stats_display(self, words: int, chars: int):
-        self.stats_label.setText(f"Words: {words:,} | Chars: {chars:,}")
-
-    def _on_toolbar_style_selected(self, index: int):
-        style_name = self.toolbar.style_combo.currentText()
-        style = self.project.doc.styles.get(style_name)
-        if style:
-            self.editor.apply_style(style)
-            # The editor will emit cursorPositionChanged, triggering _update_toolbar_states
-
-    def _on_style_hotkey(self, style_name: str):
-        style = self.project.doc.styles.get(style_name)
-        if style:
-            self.editor.apply_style(style)
-            # The editor will emit cursorPositionChanged, triggering _update_toolbar_states
-
-    def _update_toolbar_states(self):
-        """Update Bold/Italic/Underline button checked state and style indicators based on current cursor format."""
-        cursor = self.editor.textCursor()
-        char_fmt = cursor.charFormat()
-        block_fmt = cursor.blockFormat()
-        
-        # 1. Basic Formatting
-        self.toolbar.bold_action.setChecked(char_fmt.fontWeight() == QFont.Weight.Bold)
-        self.toolbar.italic_action.setChecked(char_fmt.fontItalic())
-        self.toolbar.underline_action.setChecked(char_fmt.fontUnderline())
-
-        # 1.1 Alignment Formatting
-        align = block_fmt.alignment()
-        self.toolbar.align_left_action.setChecked(bool(align & Qt.AlignmentFlag.AlignLeft))
-        self.toolbar.align_center_action.setChecked(bool(align & Qt.AlignmentFlag.AlignHCenter))
-        self.toolbar.align_right_action.setChecked(bool(align & Qt.AlignmentFlag.AlignRight))
-        self.toolbar.align_justify_action.setChecked(bool(align & Qt.AlignmentFlag.AlignJustify))
-        
-        # 2. Style Synchronization
-        style_name = block_fmt.property(STYLE_NAME_PROPERTY)
-        if style_name:
-            # Update Toolbar Dropdown
-            self.toolbar.style_combo.blockSignals(True)
-            idx = self.toolbar.style_combo.findText(style_name)
-            if idx >= 0:
-                self.toolbar.style_combo.setCurrentIndex(idx)
-            self.toolbar.style_combo.blockSignals(False)
-            
-            # Update Style Panel
-            self.style_panel.blockSignals(True)
-            self.style_panel.select_style(style_name)
-            self.style_panel.blockSignals(False)
+        import math
+        pages = math.ceil(words / self.settings.words_per_page) if words > 0 else 0
+        self.stats_label.setText(f"Words: {words:,} | Chars: {chars:,} | ~{pages} pages")
 
     def _apply_display_preferences(self):
         palette = self.editor.palette()
@@ -239,12 +180,17 @@ class MainWindow(QMainWindow):
         palette.setColor(QPalette.ColorRole.Base, QColor(self.settings.display_bg_color))
         self.editor.setPalette(palette)
 
+        # Set the widget base font so EditorWidget._update_layout uses correct metrics
+        from PySide6.QtGui import QFont
+        self.editor.setFont(QFont(self.settings.editor_font, self.settings.editor_font_size))
+
         if self.settings.dynamic_margins:
             self.editor.set_max_content_width(self.settings.max_content_width)
         else:
             self.editor.set_max_content_width(None)
 
         self.editor.set_visual_margins(self.settings.editor_margin_left, self.settings.editor_margin_right)
+        self.editor.set_text_margin_chars(self.settings.text_margin_chars)
 
         # Apply display font override (if Kindle Font toggle is off)
         if not getattr(self, '_kindle_font_mode', False):
@@ -264,6 +210,7 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, factor: float):
         self.settings.zoom_steps = int(factor)
+        self.ebook_frame.lbl_zoom.setText(str(self.settings.zoom_steps))
         logger.debug("Zoom level: %d steps", self.settings.zoom_steps)
 
     def _on_typing_tick(self):
@@ -304,6 +251,54 @@ class MainWindow(QMainWindow):
         else:
             self.editor.set_display_font_override(self.settings.editor_font)
 
+    def _on_app_theme_changed(self):
+        action = self.sender()
+        if action:
+            theme = action.data()
+            self.settings.app_theme = theme
+            self.settings.save()
+            self._apply_app_theme(theme)
+            self.statusBar().showMessage(f"App theme: {theme}", 2000)
+
+    def _apply_app_theme(self, theme: str):
+        from PySide6.QtWidgets import QStyleFactory
+        app = QApplication.instance()
+        if theme == "Dark":
+            app.setStyle(QStyleFactory.create("Fusion"))
+            palette = QPalette()
+            palette.setColor(QPalette.ColorRole.Window,          QColor("#2b2b2b"))
+            palette.setColor(QPalette.ColorRole.WindowText,      QColor("#e0e0e0"))
+            palette.setColor(QPalette.ColorRole.Base,            QColor("#1e1e1e"))
+            palette.setColor(QPalette.ColorRole.AlternateBase,   QColor("#2b2b2b"))
+            palette.setColor(QPalette.ColorRole.Text,            QColor("#e0e0e0"))
+            palette.setColor(QPalette.ColorRole.Button,          QColor("#3c3c3c"))
+            palette.setColor(QPalette.ColorRole.ButtonText,      QColor("#e0e0e0"))
+            palette.setColor(QPalette.ColorRole.Highlight,       QColor("#0078d4"))
+            palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+            palette.setColor(QPalette.ColorRole.ToolTipBase,     QColor("#3c3c3c"))
+            palette.setColor(QPalette.ColorRole.ToolTipText,     QColor("#e0e0e0"))
+            palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#a0a0a0"))
+            palette.setColor(QPalette.ColorRole.Link,            QColor("#4fc3f7"))
+            app.setPalette(palette)
+        elif theme == "Light":
+            app.setStyle(QStyleFactory.create("Fusion"))
+            palette = QPalette()
+            palette.setColor(QPalette.ColorRole.Window,          QColor("#f0f0f0"))
+            palette.setColor(QPalette.ColorRole.WindowText,      QColor("#000000"))
+            palette.setColor(QPalette.ColorRole.Base,            QColor("#ffffff"))
+            palette.setColor(QPalette.ColorRole.AlternateBase,   QColor("#f0f0f0"))
+            palette.setColor(QPalette.ColorRole.Text,            QColor("#000000"))
+            palette.setColor(QPalette.ColorRole.Button,          QColor("#e0e0e0"))
+            palette.setColor(QPalette.ColorRole.ButtonText,      QColor("#000000"))
+            palette.setColor(QPalette.ColorRole.Highlight,       QColor("#0078d4"))
+            palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+            palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#757575"))
+            palette.setColor(QPalette.ColorRole.Link,            QColor("#0000ee"))
+            app.setPalette(palette)
+        else:  # System
+            app.setStyle(QStyleFactory.create(self._system_style_name))
+            app.setPalette(self._system_palette)
+
     def _on_display_prefs(self):
         dlg = DisplayPreferencesDialog(
             self,
@@ -313,6 +308,7 @@ class MainWindow(QMainWindow):
             self.settings.display_bg_color,
             self.settings.editor_margin_left,
             self.settings.editor_margin_right,
+            self.settings.text_margin_chars,
             self.settings.dynamic_margins,
             self.settings.max_content_width,
             self.settings.show_beta_warning,
@@ -328,6 +324,7 @@ class MainWindow(QMainWindow):
             self.settings.display_bg_color = data["bg_color"]
             self.settings.editor_margin_left = data["m_left"]
             self.settings.editor_margin_right = data["m_right"]
+            self.settings.text_margin_chars = data.get("text_margin_chars", self.settings.text_margin_chars)
             self.settings.dynamic_margins = data["dynamic_margins"]
             self.settings.max_content_width = data["max_content_width"]
             self.settings.show_beta_warning = data["show_beta_warning"]
@@ -376,11 +373,12 @@ class MainWindow(QMainWindow):
         elif "Justify" in text: action.setToolTip("Justify")
         elif "Undo" in text: action.setToolTip("Reverse last action.")
         elif "Redo" in text: action.setToolTip("Re-apply last undone action.")
+
     def _setup_ui(self):
         # 1. Menus
         menubar = self.menuBar()
         
-        file_menu = menubar.addMenu("&File")
+        self.file_menu = file_menu = menubar.addMenu("&File")
         
         new_action = QAction("&New Project...", self)
         new_action.setShortcut(QKeySequence.StandardKey.New)
@@ -399,7 +397,8 @@ class MainWindow(QMainWindow):
         open_folder_action.triggered.connect(self._on_open_project_folder)
         file_menu.addAction(open_folder_action)
         
-        self.recent_menu = file_menu.addMenu("Recent Projects")
+        self.recent_menu = QMenu("Recent Projects", self)
+        file_menu.addMenu(self.recent_menu)
         self._update_recent_projects_menu()
         
         file_menu.addSeparator()
@@ -475,7 +474,7 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        edit_menu = menubar.addMenu("&Edit")
+        self.edit_menu = edit_menu = menubar.addMenu("&Edit")
         find_action = QAction("&Find...", self)
         find_action.setShortcut(QKeySequence.StandardKey.Find)
         find_action.setToolTip("Search for a word or phrase anywhere in your document (Ctrl+F).")
@@ -492,7 +491,8 @@ class MainWindow(QMainWindow):
         self.central_splitter = QSplitter(Qt.Orientation.Horizontal)
         
         self.editor = EditorWidget(self)
-        self.central_splitter.addWidget(self.editor)
+        self.ebook_frame = EbookFrameWidget(self.editor, self)
+        self.central_splitter.addWidget(self.ebook_frame)
         
         self.preview = KindlePreviewWidget(self)
         self.preview.setVisible(False) # Hidden by default
@@ -504,7 +504,15 @@ class MainWindow(QMainWindow):
         
         self.setCentralWidget(self.central_splitter)
 
-        insert_menu = menubar.addMenu("&Insert")
+        self.insert_menu = insert_menu = menubar.addMenu("&Insert")
+        
+        toc_insert_action = QAction("&Insert Table of Contents", self)
+        toc_insert_action.setToolTip("Insert a generated Table of Contents at the current cursor position.")
+        toc_insert_action.triggered.connect(self._on_insert_toc)
+        insert_menu.addAction(toc_insert_action)
+        
+        insert_menu.addSeparator()
+
         page_break_action = QAction("Page &Break", self)
         page_break_action.setShortcut(QKeySequence("Ctrl+Return"))
         page_break_action.setToolTip("Insert a page break — the next paragraph will start on a new page in the exported book (Ctrl+Enter).")
@@ -520,7 +528,7 @@ class MainWindow(QMainWindow):
         self.view_menu = menubar.addMenu("&View")
         self._setup_view_menu(self.view_menu)
 
-        help_menu = menubar.addMenu("&Help")
+        self.help_menu = help_menu = menubar.addMenu("&Help")
         
         about_action = QAction("About PortoWrite...", self)
         about_action.setToolTip("View version information and credits for PortoWrite.")
@@ -601,18 +609,21 @@ class MainWindow(QMainWindow):
         self.toolbar = EditorToolbar(self)
         self.addToolBar(self.toolbar)
 
-    def _on_save(self):
-        try:
-            self.project.doc.set_metadata("cursor_char_pos", self.editor.textCursor().position())
-            self.project.doc.set_metadata("session_seconds", self._session_seconds)
-            self.editor.sync_to_document(self.project.doc)
-            self.project.save()
-            self.is_dirty = False
-            self._update_title()
-            self.statusBar().showMessage("Project saved (backup created)", 3000)
-        except Exception as e:
-            logger.error("Failed to save project: %s", e)
-            QMessageBox.critical(self, "Save Error", f"Could not save project: {e}")
+        # 6. Connect Ebook Reading Controls (integrated into EbookFrameWidget)
+        from porto_write.ui.kindle_preview import KINDLE_THEMES
+        self.ebook_frame.device_combo.currentTextChanged.connect(self._on_ebook_device_changed)
+        self.ebook_frame.theme_combo.addItems(list(KINDLE_THEMES.keys()))
+        self.ebook_frame.theme_combo.currentTextChanged.connect(self._on_ebook_theme_combo_changed)
+
+        self.ebook_frame.btn_fs_down.clicked.connect(lambda: self._on_ebook_cpl_changed(-1))
+        self.ebook_frame.btn_fs_up.clicked.connect(lambda: self._on_ebook_cpl_changed(1))
+        
+        self.ebook_frame.btn_ls_down.clicked.connect(lambda: self._on_ebook_line_height_changed(-0.1))
+        self.ebook_frame.btn_ls_up.clicked.connect(lambda: self._on_ebook_line_height_changed(0.1))
+        
+        self.ebook_frame.btn_m_down.clicked.connect(lambda: self._on_ebook_margin_changed(-20))
+        self.ebook_frame.btn_m_up.clicked.connect(lambda: self._on_ebook_margin_changed(20))
+
 
     def _setup_view_menu(self, menu: QMenu):
         log_menu = menu.addMenu("Log Level")
@@ -649,6 +660,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(self._on_preview_theme_changed)
             self.theme_group.addAction(action)
             theme_menu.addAction(action)
+            self._ebook_theme_actions[theme_name] = action
 
         menu.addSeparator()
         
@@ -679,10 +691,53 @@ class MainWindow(QMainWindow):
         menu.addAction(kindle_font_action)
         self._kindle_font_action = kindle_font_action
 
+        app_theme_menu = menu.addMenu("App &Theme")
+        self._app_theme_group = QActionGroup(self)
+        self._app_theme_group.setExclusive(True)
+        for _theme in ("System", "Light", "Dark"):
+            _act = QAction(_theme, self, checkable=True)
+            _act.setData(_theme)
+            _act.setChecked(self.settings.app_theme == _theme)
+            _act.triggered.connect(self._on_app_theme_changed)
+            self._app_theme_group.addAction(_act)
+            app_theme_menu.addAction(_act)
+
         display_prefs_action = QAction("Display Preferences...", self)
         display_prefs_action.setToolTip("Customize the editor's appearance: font, text color, background color, margins, and zoom level.")
         display_prefs_action.triggered.connect(self._on_display_prefs)
         menu.addAction(display_prefs_action)
+
+        menu.addSeparator()
+        self.ebook_mode_action = QAction("Ebook Edit Mode", self, checkable=True)
+        self.ebook_mode_action.setToolTip("Transform the editor into a device-accurate Kindle screen with responsive layout, device profiles, and readability presets.")
+        self.ebook_mode_action.triggered.connect(self._on_ebook_mode_toggled)
+        menu.addAction(self.ebook_mode_action)
+
+        menu.addSeparator()
+        self._focus_mode_action = QAction("Focus &Mode", self, checkable=True)
+        self._focus_mode_action.setShortcut(QKeySequence("F11"))
+        self._focus_mode_action.setToolTip("Hide all panels and toolbars for distraction-free writing (F11).")
+        self._focus_mode_action.triggered.connect(self._on_focus_mode_toggled)
+        menu.addAction(self._focus_mode_action)
+
+    def _on_focus_mode_toggled(self, checked: bool):
+        if checked:
+            self._focus_saved = {
+                "chapter": self.chapter_dock.isVisible(),
+                "style": self.style_dock.isVisible(),
+                "toolbar": self.toolbar.isVisible(),
+            }
+            self.chapter_dock.hide()
+            self.style_dock.hide()
+            self.toolbar.hide()
+        else:
+            saved = getattr(self, "_focus_saved", {})
+            self.chapter_dock.setVisible(saved.get("chapter", True))
+            self.style_dock.setVisible(saved.get("style", True))
+            self.toolbar.setVisible(saved.get("toolbar", True))
+        self.statusBar().showMessage(
+            f"Focus Mode: {'Enabled' if checked else 'Disabled'}", 2000
+        )
 
     def _on_log_level_changed(self):
         action = self.sender()
@@ -699,27 +754,6 @@ class MainWindow(QMainWindow):
             logging.getLogger().warning(f"Log level is now {level}")
             
             self.statusBar().showMessage(f"Log level changed to {level}", 3000)
-
-    def _on_autosave(self):
-        """Auto-save the project to a recovery file (autosave.json)."""
-        if self.is_dirty:
-            try:
-                self.editor.sync_to_document(self.project.doc)
-                self.project.save_autosave()
-                self.statusBar().showMessage("Auto-saved (recovery copy)", 3000)
-                logger.info("Auto-saved recovery copy for project: %s", self.project.name)
-            except Exception as e:
-                logger.error("Auto-save failed: %s", e)
-
-    def _restart_autosave_timer(self):
-        """Restart the auto-save timer with the current interval."""
-        self.autosave_timer.stop()
-        if self.settings.autosave_interval_minutes > 0:
-            ms = self.settings.autosave_interval_minutes * 60 * 1000
-            self.autosave_timer.start(ms)
-            logger.debug("Auto-save timer started: %d minutes", self.settings.autosave_interval_minutes)
-        else:
-            logger.debug("Auto-save is disabled (interval=0)")
 
     def closeEvent(self, event):
         # Persist cursor position and session timer before any dialog
@@ -761,276 +795,6 @@ class MainWindow(QMainWindow):
         logger.debug("Closing MainWindow, settings saved.")
         super().closeEvent(event)
 
-    # --- File Menu Handlers ---
-
-    def _on_new(self):
-        from porto_write.ui.dialogs import ProjectPickerDialog
-        picker = ProjectPickerDialog(self.settings, self)
-        # picker._on_new_project() directly triggers NewProjectDialog
-        picker._on_new_project()
-        if picker.selected_project:
-            self._load_project(picker.selected_project)
-
-    def _on_open(self):
-        from porto_write.ui.dialogs import ProjectPickerDialog
-        picker = ProjectPickerDialog(self.settings, self)
-        if picker.exec() == QDialog.Accepted and picker.selected_project:
-            self._load_project(picker.selected_project)
-
-    def _on_open_project_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Project Folder", self.settings.projects_dir)
-        if path:
-            try:
-                project = NovelProject.load(path)
-                self._load_project(project)
-            except Exception as e:
-                logger.error("Failed to open project from %s: %s", path, e)
-                QMessageBox.critical(self, "Error", f"Could not open project: {e}")
-
-    def _on_save_as(self):
-        """Clone current project to a new folder/title."""
-        import copy
-        from porto_write.ui.dialogs import NewProjectDialog
-        dlg = NewProjectDialog(self.settings, self)
-        dlg.setWindowTitle("Save Project As (Clone)")
-        dlg.title_edit.setText(f"{self.project.doc.title} (Copy)")
-
-        if dlg.exec() == QDialog.Accepted:
-            data = dlg.get_data()
-            try:
-                self.editor.sync_to_document(self.project.doc)
-                # Create new project
-                new_project = NovelProject.create(
-                    projects_dir=self.settings.projects_dir,
-                    title=data["title"],
-                    author=data["author"],
-                    max_backups=data["max_backups"]
-                )
-                # Deep-copy current content so the two projects don't share a doc reference
-                new_project.doc = copy.deepcopy(self.project.doc)
-                new_project.doc.title = data["title"]
-                new_project.doc.author = data["author"]
-                new_project.save()
-                
-                self._load_project(new_project)
-                self.statusBar().showMessage(f"Project cloned to: {new_project.name}", 3000)
-            except Exception as e:
-                logger.error("Save As failed: %s", e)
-                QMessageBox.critical(self, "Error", f"Could not clone project: {e}")
-
-    def _on_metadata(self):
-        """Show dialog to edit project-wide metadata."""
-        from porto_write.ui.dialogs import MetadataDialog
-        cover_rel = self.project.doc.get_metadata("cover_image")
-        
-        dlg = MetadataDialog(
-            self.project.doc,
-            cover_rel,
-            self
-        )
-        
-        if dlg.exec() == QDialog.Accepted:
-            data = dlg.get_data()
-            self.editor.sync_to_document(self.project.doc)
-            self.project.doc.title = data["title"]
-            self.project.doc.subtitle = data["subtitle"]
-            self.project.doc.author = data["author"]
-            self.project.doc.series_name = data["series_name"]
-            self.project.doc.series_number = data["series_number"]
-            self.project.doc.publisher = data["publisher"]
-            self.project.doc.isbn = data["isbn"]
-            self.project.doc.keywords = data["keywords"]
-            self.project.doc.description = data["description"]
-            
-            if data["new_cover_path"]:
-                try:
-                    self.project.set_cover(data["new_cover_path"])
-                except Exception as e:
-                    logger.error("Failed to set cover image: %s", e)
-                    QMessageBox.warning(self, "Cover Image Error", f"Could not set cover: {e}")
-            else:
-                self.project.save()
-            
-            self._update_title()
-            self.statusBar().showMessage("Metadata updated", 3000)
-
-    def _on_toc_editor(self):
-        """Show dialog to edit the Table of Contents."""
-        from porto_write.ui.dialogs import TocEditorDialog
-        
-        # Ensure TOC is populated if it's the first time
-        if not self.project.doc.toc:
-            self.project.doc.refresh_toc()
-            
-        dlg = TocEditorDialog(self.project.doc, self)
-        if dlg.exec() == QDialog.Accepted:
-            self.project.save()
-            self.statusBar().showMessage("Table of Contents saved", 3000)
-
-    def _refresh_ui(self):
-        """Refresh all UI components to reflect current document state."""
-        self.editor.load_document(self.project.doc)
-        self.style_panel.refresh(self.project.doc.styles)
-        self.toolbar.refresh_styles(self.project.doc.styles.names())
-        self._on_structure_changed()
-        self._update_title()
-
-    def _handle_import(self, extension: str):
-        """Import a document filtered by the given file extension."""
-        filter_dict = {
-            ".epub": "EPUB Document (*.epub)",
-            ".md": "Markdown Document (*.md)",
-            ".docx": "Word Document (*.docx)",
-        }
-        filters = filter_dict.get(extension, "")
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, f"Import {extension.upper()[1:]}", self.settings.last_directory, filters
-        )
-
-        if file_path:
-            self.settings.last_directory = os.path.dirname(file_path)
-            self.settings.save()
-
-            try:
-                if extension == ".epub":
-                    imported_doc = import_epub(file_path)
-                elif extension == ".md":
-                    imported_doc = import_md(file_path)
-                elif extension == ".docx":
-                    imported_doc = import_docx(file_path)
-                else:
-                    raise ValueError("Unsupported file format")
-
-                self.project.doc = imported_doc
-                self.project.save()
-                self._refresh_ui()
-                self.statusBar().showMessage(f"Imported from: {os.path.basename(file_path)}", 5000)
-            except Exception as e:
-                logger.error("Import failed: %s", e)
-                QMessageBox.critical(self, "Import Error", f"Failed to import: {e}")
-
-    def _on_import_epub(self):
-        self._handle_import(".epub")
-
-    def _on_import_md(self):
-        if is_pro():
-            self._handle_import(".md")
-
-    def _on_import_docx(self):
-        if is_pro():
-            self._handle_import(".docx")
-
-    def _on_export(self):
-        """Export the current document to EPUB, MD, or DOCX."""
-        filters = "EPUB Document (*.epub)"
-        if is_pro():
-            filters += ";;Markdown Document (*.md);;Word Document (*.docx)"
-            
-        file_path, selected_filter = QFileDialog.getSaveFileName(
-            self, "Export Document", self.settings.last_directory, filters
-        )
-        
-        if file_path:
-            self.settings.last_directory = os.path.dirname(file_path)
-            self.settings.save()
-            
-            try:
-                if ".epub" in selected_filter:
-                    from porto_write.ui.dialogs import ValidationResultDialog, ExportOptionsDialog
-                    # 1. Ask for platform options
-                    opt_dlg = ExportOptionsDialog(file_path, self.settings.export_platform, self)
-                    if opt_dlg.exec() != QDialog.Accepted:
-                        return
-                    
-                    platform = opt_dlg.get_platform()
-                    self.settings.export_platform = platform
-                    self.settings.save()
-                    
-                    # 2. Export
-                    result = export_epub(
-                        self.project.doc, 
-                        file_path, 
-                        project_dir=self.project.project_dir,
-                        platform=platform
-                    )
-                    
-                    # 3. Show results
-                    dlg = ValidationResultDialog(result, file_path, self)
-                    dlg.exec()
-                elif ".md" in selected_filter and is_pro():
-                    export_md(self.project.doc, file_path)
-                elif ".docx" in selected_filter and is_pro():
-                    export_docx(self.project.doc, file_path)
-                
-                self.statusBar().showMessage(f"Exported to: {os.path.basename(file_path)}", 5000)
-            except Exception as e:
-                logger.error("Export failed: %s", e)
-                QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
-
-    def _load_project(self, project: NovelProject):
-        self._loading = True
-        try:
-            self.project = project
-            self.editor.load_document(self.project.doc)
-            self.style_panel.refresh(self.project.doc.styles)
-            self.toolbar.refresh_styles(self.project.doc.styles.names())
-            self._on_structure_changed()
-
-            # G8: Clear pending textChanged events while _loading is still True
-            QApplication.processEvents()
-
-            self.is_dirty = False
-            self._update_title()
-
-            # Check for autosave
-            if self.project.has_autosave():
-                res = QMessageBox.question(
-                    self, "Autosave Found",
-                    f"An autosave was found for '{self.project.name}'.\n\n"
-                    "This may be from a crash or a discarded session.\n\n"
-                    "Restore from autosave?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No
-                )
-                if res == QMessageBox.StandardButton.Yes:
-                    self.project.doc = self.project.load_autosave()
-                    self.editor.load_document(self.project.doc)
-                    self.style_panel.refresh(self.project.doc.styles)
-                    self.toolbar.refresh_styles(self.project.doc.styles.names())
-                    self._on_structure_changed()
-                    self.is_dirty = True
-                    self._update_title()
-                    self.statusBar().showMessage("Restored from autosave", 5000)
-                else:
-                    self.project.delete_autosave()
-
-            self._restore_cursor_position()
-            self._session_seconds = self.project.doc.get_metadata("session_seconds", 0)
-            self._update_modified_label()
-
-            self.settings.add_recent_file(project.project_dir)
-            self._update_recent_projects_menu()
-            logger.info("Switched to project: %s", project.name)
-        finally:
-            self._loading = False
-
-    def _update_recent_projects_menu(self):
-        """Dynamically rebuild the Recent Projects submenu."""
-        self.recent_menu.clear()
-        recent_paths = self.settings.recent_files
-        
-        if not recent_paths:
-            action = self.recent_menu.addAction("No recent projects")
-            action.setEnabled(False)
-            return
-
-        for path in recent_paths:
-            name = os.path.basename(path)
-            action = QAction(name, self)
-            action.setData(path)
-            action.triggered.connect(self._on_recent_project_triggered)
-            self.recent_menu.addAction(action)
-
     def _on_recent_project_triggered(self):
         action = self.sender()
         if action:
@@ -1060,57 +824,6 @@ class MainWindow(QMainWindow):
             block = block.next()
         
         self.chapter_sidebar.refresh(items)
-
-    # --- Style Management Handlers ---
-
-    def _on_style_added(self, data: dict):
-        from porto_write.styles import StyleDefinition
-        new_style = StyleDefinition(**data)
-        self.project.doc.add_style(new_style)
-        self.style_panel.refresh(self.project.doc.styles)
-        self.toolbar.refresh_styles(self.project.doc.styles.names())
-        self.is_dirty = True
-        self._update_title()
-
-    def _on_style_updated(self, old_name: str, data: dict):
-        new_name = data["name"]
-        style = self.project.doc.styles.get(old_name)
-        if not style: return
-
-        # Update properties
-        for k, v in data.items():
-            setattr(style, k, v)
-
-        if old_name != new_name:
-            self.project.doc.rename_style(old_name, new_name)
-        
-        # Refresh UI
-        self.style_panel.refresh(self.project.doc.styles)
-        self.toolbar.refresh_styles(self.project.doc.styles.names())
-        self.editor.refresh_styling()
-        self._update_preview()
-        
-        self.is_dirty = True
-        self._update_title()
-
-    def _on_style_deleted(self, name: str):
-        # First, revert blocks in the document model
-        for chapter in self.project.doc.chapters:
-            for block in chapter.blocks:
-                if block.style_name == name:
-                    block.style_name = "Body"
-        
-        # Remove from registry
-        self.project.doc.remove_style(name)
-        
-        # Refresh UI
-        self.style_panel.refresh(self.project.doc.styles)
-        self.toolbar.refresh_styles(self.project.doc.styles.names())
-        self.editor.refresh_styling()
-        self._update_preview()
-        
-        self.is_dirty = True
-        self._update_title()
 
     def _on_find(self):
         if not self._find_replace_dlg:
@@ -1158,71 +871,3 @@ class MainWindow(QMainWindow):
                 "Licence deactivated. Restart PortoWrite to apply."
             )
 
-    def _on_restore_backup(self):
-        from porto_write.ui.dialogs import RestoreBackupDialog
-        dlg = RestoreBackupDialog(self.project, self)
-        if dlg.exec() == QDialog.Accepted:
-            filename = dlg.get_selected_backup()
-            if not filename:
-                return
-                
-            try:
-                # Load the backup
-                imported_doc = self.project.load_backup(filename)
-                
-                # Replace current doc
-                self.project.doc = imported_doc
-                
-                # Mark as dirty (so they can save it as the new project.json)
-                self.is_dirty = True
-                
-                # Refresh UI
-                self._refresh_ui()
-                self.statusBar().showMessage(f"Restored from backup: {filename}", 5000)
-                logger.info("Project restored from backup: %s", filename)
-                
-            except Exception as e:
-                logger.error("Restore failed: %s", e)
-                QMessageBox.critical(self, "Restore Error", f"Failed to restore from backup: {e}")
-
-    def _on_save_snapshot(self):
-        from porto_write.ui.dialogs import SaveSnapshotDialog
-        dlg = SaveSnapshotDialog(self)
-        if dlg.exec() == QDialog.Accepted:
-            name, desc = dlg.get_data()
-            if not name:
-                return
-            try:
-                self.project.save_snapshot(name, desc)
-                self.statusBar().showMessage(f"Snapshot '{name}' saved.", 3000)
-                logger.info("Snapshot saved: %s", name)
-            except Exception as e:
-                logger.error("Save snapshot failed: %s", e)
-                QMessageBox.critical(self, "Error", f"Could not save snapshot: {e}")
-
-    def _on_version_history(self):
-        from porto_write.ui.dialogs import VersionHistoryDialog
-        dlg = VersionHistoryDialog(self.project, self)
-        if dlg.exec() == QDialog.Accepted:
-            filename = dlg.get_selected_filename()
-            if not filename:
-                return
-                
-            try:
-                # Load the snapshot
-                imported_doc = self.project.restore_snapshot(filename)
-                
-                # Replace current doc
-                self.project.doc = imported_doc
-                
-                # Mark as dirty
-                self.is_dirty = True
-                
-                # Refresh UI
-                self._refresh_ui()
-                self.statusBar().showMessage(f"Restored version: {filename}", 5000)
-                logger.info("Project restored from snapshot: %s", filename)
-                
-            except Exception as e:
-                logger.error("Restore snapshot failed: %s", e)
-                QMessageBox.critical(self, "Restore Error", f"Failed to restore version: {e}")

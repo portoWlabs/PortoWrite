@@ -5,39 +5,23 @@ from typing import Optional
 from PySide6.QtWidgets import QTextEdit, QMenu, QApplication
 from PySide6.QtGui import (
     QTextCursor, QTextBlockFormat, QTextCharFormat,
-    QFont, QAction, QKeySequence, QSyntaxHighlighter,
-    QTextFrameFormat, QColor, QPen, QBrush, QTextDocument
+    QFont, QAction, QKeySequence,
+    QTextFrameFormat, QTextDocument
 )
-from PySide6.QtCore import Signal, Qt, QRegularExpression, QMimeData
+from PySide6.QtCore import Signal, Qt, QRegularExpression, QMimeData, QTimer
 from porto_write.constants import STYLE_NAME_PROPERTY, DROP_CAP_PROPERTY
 from porto_write.document import PortoDocument, TextBlock, Chapter
 from porto_write.styles import StyleDefinition
+from porto_write.ui.spell_highlighter import SpellCheckHighlighter
+from porto_write.ui.find_replace_mixin import FindReplaceMixin
 
 logger = logging.getLogger(__name__)
 
-class SpellCheckHighlighter(QSyntaxHighlighter):
-    """Highlighter that underlines misspelled words in red."""
-    
-    def __init__(self, parent, spell_checker):
-        super().__init__(parent)
-        self.spell_checker = spell_checker
-        self.error_format = QTextCharFormat()
-        self.error_format.setUnderlineColor(Qt.GlobalColor.red)
-        self.error_format.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SpellCheckUnderline)
-        self.word_re = re.compile(r"\b\w+(?:'\w+)*\b")
-
-    def highlightBlock(self, text):
-        if not self.spell_checker:
-            return
-        for match in self.word_re.finditer(text):
-            word = match.group()
-            if not self.spell_checker.check(word):
-                self.setFormat(match.start(), match.end() - match.start(), self.error_format)
-
-class EditorWidget(QTextEdit):
+class EditorWidget(FindReplaceMixin, QTextEdit):
     """WYSIWYG editor for PortoWrite documents."""
     
     style_hotkey_triggered = Signal(str)
+    active_chapter_changed = Signal(int)
     zoom_changed = Signal(float)
     stats_changed = Signal(int, int) 
     structure_changed = Signal() 
@@ -51,21 +35,58 @@ class EditorWidget(QTextEdit):
         self._zoom_factor = 1.0  # Base scale multiplier
         self._user_margin_left = 0
         self._user_margin_right = 0
+        self._text_margin_chars = 0  # Character-width based margin (0 = disabled)
         self._max_content_width = None
         self.spell_checker = None
         self._chapter_positions = []
         self._current_doc_ref = None
+        self._ebook_mode = False # S20.1
+        self._suppress_refresh = False
+        self.highlighter = None  # S20.4
         self._display_font_override: Optional[str] = None
+        self._display_line_height_override: Optional[float] = None
         self._setup_shortcuts()
-        self.textChanged.connect(self._update_stats)
+        self._stats_timer = QTimer(self)
+        self._stats_timer.setSingleShot(True)
+        self._stats_timer.setInterval(400)
+        self._stats_timer.timeout.connect(self._update_stats)
+        self.textChanged.connect(self._stats_timer.start)
+
+        self._layout_timer = QTimer(self)
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.setInterval(150)
+        self._layout_timer.timeout.connect(self._update_layout)
+
+        self._style_timer = QTimer(self)
+        self._style_timer.setSingleShot(True)
+        self._style_timer.setInterval(200)
+        self._style_timer.timeout.connect(self.refresh_styling)
+
+        self.cursorPositionChanged.connect(self._check_active_chapter)
 
     def set_spell_checker(self, spell_checker):
         self.spell_checker = spell_checker
+
+    def set_highlighter(self, highlighter):
+        self.highlighter = highlighter
 
     def set_display_font_override(self, font_name: Optional[str]):
         """Set a render-time font override (None = use style-defined fonts)."""
         self._display_font_override = font_name
         self.refresh_styling()
+
+    def set_display_line_height_override(self, value: Optional[float]):
+        """Set a temporary line-height multiplier for ebook mode; None restores normal spacing."""
+        self._display_line_height_override = value
+        self.refresh_styling()
+
+    def _check_active_chapter(self):
+        """Emit active_chapter_changed signal if the cursor has moved into a different chapter."""
+        idx = self.current_chapter_index()
+        if hasattr(self, "_last_active_chapter") and self._last_active_chapter == idx:
+            return
+        self._last_active_chapter = idx
+        self.active_chapter_changed.emit(idx)
 
     def current_chapter_index(self) -> int:
         """Return the index of the chapter containing the cursor, or -1."""
@@ -77,6 +98,22 @@ class EditorWidget(QTextEdit):
             else:
                 break
         return idx
+
+    def top_visible_block_ids(self) -> tuple | None:
+        """Return (chap_idx, block_idx) for the topmost block visible in the viewport."""
+        from PySide6.QtCore import QPoint
+        cursor = self.cursorForPosition(QPoint(0, 0))
+        block_num = cursor.block().blockNumber()
+        chap_idx = -1
+        for i, start in enumerate(self._chapter_positions):
+            if start <= block_num:
+                chap_idx = i
+            else:
+                break
+        if chap_idx < 0:
+            return None
+        block_idx = block_num - self._chapter_positions[chap_idx]
+        return (chap_idx, block_idx)
 
     def contextMenuEvent(self, event):
         menu = self.createStandardContextMenu()
@@ -301,10 +338,13 @@ class EditorWidget(QTextEdit):
     def _add_to_dictionary(self, word):
         if self.spell_checker:
             self.spell_checker.add_to_user_dict(word)
-            self.document().markContentsDirty(0, self.document().characterCount())
-            # Nudge parent highlighter if available
-            if hasattr(self.parent(), "highlighter") and self.parent().highlighter:
-                self.parent().highlighter.rehighlight()
+            # Rehighlight via the highlighter stored on this widget (works in both
+            # standard and ebook mode; parent().highlighter is unreliable in ebook mode
+            # because the editor's parent is EbookFrameWidget, not MainWindow).
+            if self.highlighter:
+                self.highlighter.rehighlight()
+            else:
+                self.document().markContentsDirty(0, self.document().characterCount())
 
     def _update_stats(self):
         text = self.toPlainText()
@@ -329,8 +369,8 @@ class EditorWidget(QTextEdit):
         """Update the internal zoom level and refresh the document."""
         self._zoom_steps = steps
         self._zoom_factor = 1.0 + (steps * 0.1)
-        self._zoom_factor = max(0.1, self._zoom_factor) # Sanity check
-        self.refresh_styling()
+        self._zoom_factor = max(0.1, self._zoom_factor)
+        self._style_timer.start()
 
     def zoomIn(self, range=1):
         self._zoom_steps += range
@@ -342,8 +382,19 @@ class EditorWidget(QTextEdit):
         self.set_zoom_steps(self._zoom_steps)
         self.zoom_changed.emit(float(self._zoom_steps))
 
+    def batch_updates(self, enable: bool):
+        """Enable or disable batching of layout/style refreshes.
+
+        While True, calls to refresh_styling() and _update_layout() are suppressed.
+        Set to False and then call refresh_styling() manually to apply the accumulated
+        changes in a single pass.
+        """
+        self._suppress_refresh = enable
+
     def refresh_styling(self):
         """Iterate through all blocks and re-apply styles using the current zoom factor."""
+        if self._suppress_refresh:
+            return
         if not self._current_doc_ref:
             return
         
@@ -379,21 +430,77 @@ class EditorWidget(QTextEdit):
         self._user_margin_right = right
         self._update_layout()
 
+    def set_text_margin_chars(self, char_count: int):
+        """Set text padding from edges in character widths (0 = disabled)."""
+        self._text_margin_chars = char_count
+        self._update_layout()
+
+    def set_ebook_mode(self, enabled: bool, profile: dict):
+        """Toggle device-accurate writing frame. Caller is responsible for restoring palette/margins on disable."""
+        self._ebook_mode = enabled
+        
+        if enabled:
+            # Performance: set fields directly to avoid redundant _update_layout() calls
+            self._max_content_width = profile.get("content_width_chars")
+            self._user_margin_left, self._user_margin_right = profile.get("margins", (40, 40))
+
+            self.setViewportMargins(60, 20, 60, 60)
+        else:
+            self._max_content_width = None
+            self._user_margin_left = 0
+            self._user_margin_right = 0
+
+            self.setViewportMargins(0, 0, 0, 0)
+            self.viewport().setPalette(self.style().standardPalette())
+        
+        if self.highlighter:
+            self.highlighter.set_ebook_mode(enabled)
+            
+        self._update_layout()
+
     def _update_layout(self):
+        if self._suppress_refresh:
+            return
         left = self._user_margin_left
         right = self._user_margin_right
+
+        # Calculate character-width based margins if enabled
+        if self._text_margin_chars > 0:
+            from PySide6.QtGui import QFont, QFontMetrics
+            font_family = self._display_font_override if self._display_font_override else self.font().family()
+            font = QFont(font_family)
+            widget_size = self.font().pointSize()
+            base_size = widget_size if widget_size > 0 else 11
+            font.setPointSize(base_size)
+            fm = QFontMetrics(font)
+            char_width = fm.horizontalAdvance('0')
+            char_margin = char_width * self._text_margin_chars
+            left = self._user_margin_left + char_margin
+            right = self._user_margin_right + char_margin
+
         if self._max_content_width:
             # Calculate pixel width based on average character width
-            from PySide6.QtGui import QFontMetrics
-            fm = QFontMetrics(self.font())
+            from PySide6.QtGui import QFont, QFontMetrics
+            # Use the display font override if available, otherwise the widget font
+            font_family = self._display_font_override if self._display_font_override else self.font().family()
+            font = QFont(font_family)
+            # Use a reasonable base size if the widget font is too small (e.g. system default)
+            widget_size = self.font().pointSize()
+            base_size = widget_size if widget_size > 0 else 11
+            font.setPointSize(base_size)
+
+            fm = QFontMetrics(font)
             char_width = fm.horizontalAdvance('0')
             px_width = char_width * self._max_content_width
-            
+
             available_width = self.viewport().width()
-            if available_width > px_width:
-                auto_margin = (available_width - px_width) // 2
-                left = max(left, auto_margin)
-                right = max(right, auto_margin)
+            # Respect asymmetric minimum margins by centering the block within the remaining space
+            extra_space = available_width - px_width - left - right
+            if extra_space > 0:
+                auto_margin = extra_space // 2
+                left = left + auto_margin
+                right = right + auto_margin
+
         doc = self.document()
         fmt = doc.rootFrame().frameFormat()
         if fmt.leftMargin() != left or fmt.rightMargin() != right:
@@ -403,7 +510,7 @@ class EditorWidget(QTextEdit):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._update_layout()
+        self._layout_timer.start()
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -456,6 +563,7 @@ class EditorWidget(QTextEdit):
                 if body_style:
                     cursor.setBlockFormat(self._style_to_block_format(body_style, None))
                     cursor.setCharFormat(self._style_to_char_format(body_style))
+                self._update_layout()
                 return
 
             cursor.beginEditBlock()
@@ -489,6 +597,7 @@ class EditorWidget(QTextEdit):
             self.document().blockSignals(False)
 
         self._update_stats()
+        self._update_layout()
         logger.debug("Document loaded.")
 
     def scroll_to_chapter(self, index: int):
@@ -506,6 +615,30 @@ class EditorWidget(QTextEdit):
                 absolute_y = y_pos + self.verticalScrollBar().value()
                 self.verticalScrollBar().setValue(absolute_y)
                 logger.debug("Scrolled chapter %d to top.", index)
+
+    def scroll_to_block(self, chap_idx: int, b_idx: int):
+        """Scroll to a specific block within a chapter and place the cursor."""
+        if 0 <= chap_idx < len(self._chapter_positions):
+            start_block_num = self._chapter_positions[chap_idx]
+            target_block_num = start_block_num + b_idx
+            
+            block = self.document().findBlockByNumber(target_block_num)
+            if block.isValid():
+                cursor = self.textCursor()
+                cursor.setPosition(block.position())
+                self.setTextCursor(cursor)
+                self.setFocus()
+                
+                # Center the block in the viewport if possible
+                viewport_height = self.viewport().height()
+                rect = self.cursorRect(cursor)
+                cursor_y_in_viewport = rect.center().y()
+                current_scroll = self.verticalScrollBar().value()
+                
+                target_scroll = current_scroll + cursor_y_in_viewport - (viewport_height // 2)
+                self.verticalScrollBar().setValue(max(0, target_scroll))
+                
+                logger.debug("Scrolled to chap %d, block %d (block_num %d)", chap_idx, b_idx, target_block_num)
 
     def _insert_styled_block(self, cursor: QTextCursor, text: str, style: StyleDefinition, prev_style_name: str = None):
         block_format = self._style_to_block_format(style, prev_style_name)
@@ -528,13 +661,21 @@ class EditorWidget(QTextEdit):
             fmt.setAlignment(Qt.AlignmentFlag.AlignJustify)
         else:
             fmt.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        fmt.setLineHeight(float(style.line_height * 100), QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        
+        lh = self._display_line_height_override if self._display_line_height_override is not None else style.line_height
+        fmt.setLineHeight(float(lh * 100), QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
 
         dpi_scale = self.logicalDpiY() / 72.0
 
         fmt.setTopMargin(style.space_before * dpi_scale)
         fmt.setBottomMargin(style.space_after * dpi_scale)
-        if style.page_break_before or style.name == "ChapterHeader":
+        
+        # Specialized Ebook Mode handling for PageBreak
+        if style.name == "PageBreak" and self._ebook_mode:
+            fmt.setTopMargin(40 * dpi_scale)
+            fmt.setBottomMargin(20 * dpi_scale)
+            fmt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        elif style.page_break_before or style.name == "ChapterHeader":
             fmt.setTopMargin(max(style.space_before, 40) * dpi_scale)
 
         if style.name == "Body":
@@ -553,6 +694,12 @@ class EditorWidget(QTextEdit):
         font_family = self._display_font_override if use_override else style.font_family
         fmt.setFontFamily(font_family)
         fmt.setFontPointSize(style.font_size * self._zoom_factor)
+        
+        # Specialized Ebook Mode handling for PageBreak
+        if style.name == "PageBreak" and self._ebook_mode:
+            fmt.setFontPointSize(9 * self._zoom_factor)
+            # Foreground is handled by the ephemeral highlighter for better performance
+
         if style.bold:
             fmt.setFontWeight(QFont.Weight.Bold)
         if style.italic:
@@ -560,6 +707,20 @@ class EditorWidget(QTextEdit):
         if style.underline:
             fmt.setFontUnderline(True)
         return fmt
+
+    def apply_style_to_block(self, cursor, style_name: str):
+        """Apply a named style to the block at the cursor's current position."""
+        if not self._current_doc_ref:
+            return
+        style = self._current_doc_ref.styles.get(style_name)
+        if not style:
+            return
+            
+        prev_block = cursor.block().previous()
+        prev_style_name = prev_block.blockFormat().property(STYLE_NAME_PROPERTY) if prev_block.isValid() else None
+        
+        cursor.setBlockFormat(self._style_to_block_format(style, prev_style_name))
+        cursor.setCharFormat(self._style_to_char_format(style))
 
     def apply_style(self, style: StyleDefinition):
         """Surgical application to avoid leakage."""
@@ -671,124 +832,6 @@ class EditorWidget(QTextEdit):
                 break
                 
         self.structure_changed.emit()
-
-    def find_next(self, text: str, case: bool = False, whole_word: bool = False, use_regex: bool = False) -> bool:
-        """Find next occurrence of text, wrapping around at end of document."""
-        if not text:
-            return False
-        flags = QTextDocument.FindFlag(0)
-        if case:
-            flags |= QTextDocument.FindFlag.FindCaseSensitively
-        if whole_word:
-            flags |= QTextDocument.FindFlag.FindWholeWords
-
-        if use_regex:
-            pattern = QRegularExpression(text)
-            if not case:
-                pattern.setPatternOptions(QRegularExpression.PatternOption.CaseInsensitiveOption)
-            cursor = self.document().find(pattern, self.textCursor(), flags)
-            if cursor.isNull():
-                cursor = self.document().find(pattern, 0, flags)
-        else:
-            cursor = self.document().find(text, self.textCursor(), flags)
-            if cursor.isNull():
-                cursor = self.document().find(text, 0, flags)
-
-        if not cursor.isNull():
-            self.setTextCursor(cursor)
-            return True
-        return False
-
-    def find_prev(self, text: str, case: bool = False, whole_word: bool = False, use_regex: bool = False) -> bool:
-        """Find previous occurrence of text, wrapping around at start of document."""
-        if not text:
-            return False
-        flags = QTextDocument.FindFlag.FindBackward
-        if case:
-            flags |= QTextDocument.FindFlag.FindCaseSensitively
-        if whole_word:
-            flags |= QTextDocument.FindFlag.FindWholeWords
-
-        if use_regex:
-            pattern = QRegularExpression(text)
-            if not case:
-                pattern.setPatternOptions(QRegularExpression.PatternOption.CaseInsensitiveOption)
-            cursor = self.document().find(pattern, self.textCursor(), flags)
-            if cursor.isNull():
-                end = QTextCursor(self.document())
-                end.movePosition(QTextCursor.MoveOperation.End)
-                cursor = self.document().find(pattern, end, flags)
-        else:
-            cursor = self.document().find(text, self.textCursor(), flags)
-            if cursor.isNull():
-                end = QTextCursor(self.document())
-                end.movePosition(QTextCursor.MoveOperation.End)
-                cursor = self.document().find(text, end, flags)
-
-        if not cursor.isNull():
-            self.setTextCursor(cursor)
-            return True
-        return False
-
-    def replace_current(self, find_text: str, replace_text: str, case: bool = False, whole_word: bool = False, use_regex: bool = False) -> bool:
-        """Replace current selection if it matches, then advance to next match."""
-        if not find_text:
-            return False
-        cursor = self.textCursor()
-        selected = cursor.selectedText()
-
-        if use_regex:
-            pattern = QRegularExpression(find_text)
-            if not case:
-                pattern.setPatternOptions(QRegularExpression.PatternOption.CaseInsensitiveOption)
-            matched = pattern.match(selected).hasMatch()
-        else:
-            matched = (selected == find_text) if case else (selected.lower() == find_text.lower())
-
-        if matched:
-            cursor.insertText(replace_text)
-            self.setTextCursor(cursor)
-
-        self.find_next(find_text, case, whole_word, use_regex)
-        return matched
-
-    def replace_all(self, find_text: str, replace_text: str, case: bool = False, whole_word: bool = False, use_regex: bool = False) -> int:
-        """Replace all occurrences. Returns count of replacements made."""
-        if not find_text:
-            return 0
-        flags = QTextDocument.FindFlag(0)
-        if case:
-            flags |= QTextDocument.FindFlag.FindCaseSensitively
-        if whole_word:
-            flags |= QTextDocument.FindFlag.FindWholeWords
-
-        search_cursor = QTextCursor(self.document())
-        search_cursor.movePosition(QTextCursor.MoveOperation.Start)
-        search_cursor.beginEditBlock()
-        count = 0
-
-        if use_regex:
-            pattern = QRegularExpression(find_text)
-            if not case:
-                pattern.setPatternOptions(QRegularExpression.PatternOption.CaseInsensitiveOption)
-            while True:
-                found = self.document().find(pattern, search_cursor, flags)
-                if found.isNull():
-                    break
-                found.insertText(replace_text)
-                search_cursor = found
-                count += 1
-        else:
-            while True:
-                found = self.document().find(find_text, search_cursor, flags)
-                if found.isNull():
-                    break
-                found.insertText(replace_text)
-                search_cursor = found
-                count += 1
-
-        search_cursor.endEditBlock()
-        return count
 
     def set_current_alignment(self, alignment_str: str) -> None:
         """

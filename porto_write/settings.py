@@ -20,6 +20,7 @@ class AppSettings:
     display_bg_color: str = "#ffffff"
     editor_margin_left: int = 50
     editor_margin_right: int = 50
+    text_margin_chars: int = 0           # 0 = disabled, > 0 = character-width margin
     dynamic_margins: bool = True
     max_content_width: int = 65
     autosave_interval_minutes: int = 5
@@ -32,6 +33,16 @@ class AppSettings:
     export_platform: str = "kindle"
     words_per_page: int = 275
     tooltips_enabled: bool = True
+    
+    # Ebook Reading Mode (S22.4)
+    ebook_device: str = "Kindle Paperwhite"
+    ebook_theme: str = "Paperwhite"
+    ebook_line_height: float = 1.5
+    ebook_margin: int = 0
+    ebook_cpl: int = 55
+
+    # App Theme (F9)
+    app_theme: str = "System"
 
     def load(self) -> "AppSettings":
         try:
@@ -49,6 +60,7 @@ class AppSettings:
             self.display_bg_color     = data.get("display_bg_color", self.display_bg_color)
             self.editor_margin_left   = int(data.get("editor_margin_left", self.editor_margin_left))
             self.editor_margin_right  = int(data.get("editor_margin_right", self.editor_margin_right))
+            self.text_margin_chars    = int(data.get("text_margin_chars", self.text_margin_chars))
             self.dynamic_margins      = bool(data.get("dynamic_margins", self.dynamic_margins))
             self.max_content_width    = int(data.get("max_content_width", self.max_content_width))
             self.autosave_interval_minutes = int(data.get("autosave_interval_minutes", self.autosave_interval_minutes))
@@ -61,6 +73,13 @@ class AppSettings:
             self.export_platform      = data.get("export_platform", self.export_platform)
             self.words_per_page       = int(data.get("words_per_page", self.words_per_page))
             self.tooltips_enabled     = bool(data.get("tooltips_enabled", self.tooltips_enabled))
+            
+            self.ebook_device         = data.get("ebook_device", self.ebook_device)
+            self.ebook_theme          = data.get("ebook_theme", self.ebook_theme)
+            self.ebook_line_height    = float(data.get("ebook_line_height", self.ebook_line_height))
+            self.ebook_margin         = int(data.get("ebook_margin", self.ebook_margin))
+            self.ebook_cpl            = int(data.get("ebook_cpl", self.ebook_cpl))
+            self.app_theme            = data.get("app_theme", self.app_theme)
         except (FileNotFoundError, json.JSONDecodeError, ValueError):
             pass
         logger.debug("Settings loaded")
@@ -82,6 +101,7 @@ class AppSettings:
                     "display_bg_color":     self.display_bg_color,
                     "editor_margin_left":   self.editor_margin_left,
                     "editor_margin_right":  self.editor_margin_right,
+                    "text_margin_chars":    self.text_margin_chars,
                     "dynamic_margins":      self.dynamic_margins,
                     "max_content_width":    self.max_content_width,
                     "autosave_interval_minutes": self.autosave_interval_minutes,
@@ -94,10 +114,17 @@ class AppSettings:
                     "export_platform":      self.export_platform,
                     "words_per_page":       self.words_per_page,
                     "tooltips_enabled":     self.tooltips_enabled,
+                    "ebook_device":         self.ebook_device,
+                    "ebook_theme":          self.ebook_theme,
+                    "ebook_line_height":    self.ebook_line_height,
+                    "ebook_margin":         self.ebook_margin,
+                    "ebook_cpl":            self.ebook_cpl,
+                    "app_theme":            self.app_theme,
                 }, f, indent=2)
             logger.debug("Settings saved")
         except Exception as exc:
             logger.error("Could not save settings: %s", exc)
+
 
     def add_recent_file(self, path: str, max_recent: int = 10) -> None:
         if path in self.recent_files:

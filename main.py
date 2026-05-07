@@ -30,6 +30,8 @@ def main():
     logger.debug("Parsing arguments...")
     parser = argparse.ArgumentParser(description=f"{APP_NAME} v{APP_VERSION}")
     parser.add_argument("--self-test", action="store_true", help="Run self-test suite and exit")
+    parser.add_argument("--project", type=str, help="Project name or path to open directly (bypasses project picker)")
+    parser.add_argument("--auto-close", type=int, help="Auto-close app after N seconds (0 = immediate, useful for testing)")
     args = parser.parse_args()
 
     # 1. Load settings
@@ -73,24 +75,46 @@ def main():
             sys.exit(0)
 
     try:
-        # Show project picker first
-        logger.debug("Initializing ProjectPickerDialog...")
-        picker = ProjectPickerDialog(settings)
-        logger.debug("Executing ProjectPickerDialog...")
-        if picker.exec() != ProjectPickerDialog.Accepted:
-            logger.info("Project picker cancelled or closed, exiting.")
-            return
+        # Determine project to open
+        project = None
+        if args.project:
+            # Bypass project picker if --project argument provided
+            logger.debug(f"Using --project argument: {args.project}")
+            from porto_write.document import PortoDocument
+            try:
+                project = PortoDocument.load(args.project)
+                if not project:
+                    logger.error(f"Failed to load project from {args.project}")
+                    return
+                logger.info(f"Loaded project: {project.name}")
+            except Exception as e:
+                logger.error(f"Error loading project {args.project}: {e}")
+                return
+        else:
+            # Show project picker
+            logger.debug("Initializing ProjectPickerDialog...")
+            picker = ProjectPickerDialog(settings)
+            logger.debug("Executing ProjectPickerDialog...")
+            if picker.exec() != ProjectPickerDialog.Accepted:
+                logger.info("Project picker cancelled or closed, exiting.")
+                return
 
-        project = picker.selected_project
-        if not project:
-            logger.error("Picker accepted but no project selected?")
-            return
+            project = picker.selected_project
+            if not project:
+                logger.error("Picker accepted but no project selected?")
+                return
 
         logger.debug(f"Initializing MainWindow for project: {project.name}...")
         window = MainWindow(settings, project)
         logger.debug("Showing MainWindow...")
         window.show()
-        
+
+        # Setup auto-close if requested
+        if args.auto_close is not None:
+            from PySide6.QtCore import QTimer
+            logger.debug(f"Setting auto-close timer for {args.auto_close}ms...")
+            QTimer.singleShot(args.auto_close, lambda: app.quit())
+
         logger.debug("Entering main event loop...")
         exit_code = app.exec()
         logger.info(f"--- {APP_NAME} Session Ended (exit code: {exit_code}) ---")
