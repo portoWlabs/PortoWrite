@@ -180,6 +180,14 @@ class EbookFrameWidget(QWidget):
         self.adjustSize()
         logger.debug(f"[EBOOK_FRAME] After adjustSize(): device_container geometry={self.device_container.geometry()}, editor geometry={self._editor.geometry()}")
 
+        # Force parent layout (splitter) to recalculate as well
+        logger.debug(f"[EBOOK_FRAME] Forcing parent layout recalculation")
+        if self.parentWidget():
+            if hasattr(self.parentWidget(), 'layout') and self.parentWidget().layout():
+                self.parentWidget().layout().activate()
+            self.parentWidget().adjustSize()
+        logger.debug(f"[EBOOK_FRAME] After parent recalc: this widget geometry={self.geometry()}")
+
         logger.debug(f"[EBOOK_FRAME] Calling update() to repaint")
         self.update()
         logger.debug(f"[EBOOK_FRAME] deactivate() complete")
