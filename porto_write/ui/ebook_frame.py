@@ -172,7 +172,11 @@ class EbookFrameWidget(QWidget):
         self._editor.viewport().setMask(QRegion()) # Clear mask
 
         # Force layout recalculation immediately (not just queue a repaint)
-        logger.debug(f"[EBOOK_FRAME] Calling activate() to force layout recalculation")
+        # Must activate device_layout first (innermost), then main_layout
+        logger.debug(f"[EBOOK_FRAME] Calling device_layout.activate()")
+        self.device_layout.activate()
+
+        logger.debug(f"[EBOOK_FRAME] Calling main_layout.activate()")
         self.main_layout.activate()
         logger.debug(f"[EBOOK_FRAME] After activate(): device_container geometry={self.device_container.geometry()}, editor geometry={self._editor.geometry()}")
 
