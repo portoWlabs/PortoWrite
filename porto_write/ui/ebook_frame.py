@@ -1,6 +1,9 @@
+import logging
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout
 from PySide6.QtGui import QPainter, QColor, QPainterPath, QRegion
 from PySide6.QtCore import Qt, QRectF
+
+logger = logging.getLogger(__name__)
 
 
 class EbookFrameWidget(QWidget):
@@ -121,9 +124,6 @@ class EbookFrameWidget(QWidget):
 
     def activate(self, profile: dict) -> None:
         """Enter device-frame mode: constrain editor width and paint bezel."""
-        import logging
-        logger = logging.getLogger(__name__)
-
         logger.debug(f"[EBOOK_FRAME] activate() called with profile={profile.get('name', 'unknown')}")
         logger.debug(f"[EBOOK_FRAME] Before: main width={self.width()}, device_container geometry={self.device_container.geometry()}")
 
@@ -150,9 +150,6 @@ class EbookFrameWidget(QWidget):
 
     def deactivate(self) -> None:
         """Return to standard pass-through: remove width constraints and bezel."""
-        import logging
-        logger = logging.getLogger(__name__)
-
         logger.debug(f"[EBOOK_FRAME] deactivate() called")
         logger.debug(f"[EBOOK_FRAME] Before: device_container geometry={self.device_container.geometry()}, editor geometry={self._editor.geometry()}")
 
