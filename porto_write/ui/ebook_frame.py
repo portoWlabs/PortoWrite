@@ -184,6 +184,10 @@ class EbookFrameWidget(QWidget):
         self.adjustSize()
         logger.debug(f"[EBOOK_FRAME] After adjustSize(): device_container geometry={self.device_container.geometry()}, editor geometry={self._editor.geometry()}")
 
+        logger.debug(f"[EBOOK_FRAME] Calling updateGeometry() on children")
+        self._editor.updateGeometry()
+        self.device_container.updateGeometry()
+
         logger.debug(f"[EBOOK_FRAME] Calling updateGeometry() to notify parent of size change")
         self.updateGeometry()
         logger.debug(f"[EBOOK_FRAME] After updateGeometry(): widget geometry={self.geometry()}")
