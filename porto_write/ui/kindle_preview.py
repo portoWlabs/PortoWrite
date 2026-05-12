@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QTextBrowser, 
     QPushButton, QComboBox, QLabel, QSpacerItem, QSizePolicy
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QUrl
 from porto_write.document import PortoDocument
 
 logger = logging.getLogger(__name__)
@@ -73,20 +73,21 @@ def document_to_kindle_html(doc: PortoDocument, font_size_pt=12, margin_px=40, l
     }}
     h1 {{ font-size: 1.8em; text-align: center; }}
     p {{ margin: 0; padding: 0; text-indent: 0; }}
+    a {{ text-decoration: none; color: inherit; }}
     
-    .page-break-bar {
+    .page-break-bar {{
         border-top: 1px dashed #bbb;
         margin: 40px 0 20px 0;
         text-align: center;
         height: 1px;
-    }
-    .scene-break-bar {
+    }}
+    .scene-break-bar {{
         margin: 24px 0;
         text-align: center;
         color: #999;
         font-size: 1.2em;
-    }
-    .page-break-label {
+    }}
+    .page-break-label {{
         font-family: sans-serif;
         font-size: 9px;
         color: #999;
@@ -96,7 +97,7 @@ def document_to_kindle_html(doc: PortoDocument, font_size_pt=12, margin_px=40, l
         position: relative;
         top: -6px;
         padding: 0 10px;
-    }
+    }}
     """
     
     # Custom scrollbar hiding for cleaner "device" look
@@ -110,27 +111,35 @@ def document_to_kindle_html(doc: PortoDocument, font_size_pt=12, margin_px=40, l
     for i, chapter in enumerate(doc.chapters):
         html += f'<div class="chapter">'
         
+        # Track block counter within chapter for click-to-edit
+        b_idx = 0
+        
         if chapter.title:
             # G18: Only inject bar if it's NOT the first chapter
             if i > 0:
                 html += '<div class="page-break-bar"><span class="page-break-label">Page Break</span></div>'
             
-            html += f'<h1 class="ChapterHeader">{chapter.title}</h1>'
+            html += f'<h1 id="b{i}_{b_idx}" class="ChapterHeader"><a href="block://{i}/{b_idx}">{chapter.title}</a></h1>'
+            b_idx += 1
         
         for block in chapter.blocks:
             # G18: Specialized handling for marker styles to prevent duplicates
             if block.style_name == "PageBreak":
                 html += '<div class="page-break-bar"><span class="page-break-label">Page Break</span></div>'
+                b_idx += 1
                 continue
             elif block.style_name == "SceneBreak":
                 html += '<div class="scene-break-bar">⚬ ⚬ ⚬</div>'
+                b_idx += 1
                 continue
 
             style = doc.styles.get(block.style_name)
             if style and style.page_break_before:
                 html += '<div class="page-break-bar"><span class="page-break-label">Page Break</span></div>'
                 
-            html += f'<div class="{block.style_name}">{block.text or "&nbsp;"}</div>'
+            text = block.text or "&nbsp;"
+            html += f'<div id="b{i}_{b_idx}" class="{block.style_name}"><a href="block://{i}/{b_idx}">{text}</a></div>'
+            b_idx += 1
         
         html += '</div>'
 
@@ -139,6 +148,8 @@ def document_to_kindle_html(doc: PortoDocument, font_size_pt=12, margin_px=40, l
 
 class KindlePreviewWidget(QWidget):
     """Simulated Kindle device frame containing a fixed-width reader."""
+
+    block_clicked = Signal(int, int) # (chap_idx, block_idx)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -249,6 +260,8 @@ class KindlePreviewWidget(QWidget):
         self.browser.setFixedWidth(380)
         self.browser.setReadOnly(True)
         self.browser.setAcceptRichText(True)
+        self.browser.setOpenLinks(False)
+        self.browser.anchorClicked.connect(self._on_anchor_clicked)
         self.browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.browser.setFrameStyle(QFrame.NoFrame)
         
@@ -256,6 +269,19 @@ class KindlePreviewWidget(QWidget):
         self.main_layout.addWidget(self.device_frame)
 
         self._apply_theme_colors()
+
+    def _on_anchor_clicked(self, url: QUrl):
+        """Handle block clicks for 'Click-to-Edit' functionality."""
+        url_str = url.toString()
+        if url_str.startswith("block://"):
+            try:
+                # Format: block://chap_idx/block_idx
+                parts = url_str[8:].split('/')
+                chap_idx = int(parts[0])
+                block_idx = int(parts[1])
+                self.block_clicked.emit(chap_idx, block_idx)
+            except (ValueError, IndexError) as e:
+                logger.warning("Failed to parse block anchor: %s", url_str)
 
     def resizeEvent(self, event):
         """Responsive sizing for the Kindle frame."""
@@ -322,6 +348,10 @@ class KindlePreviewWidget(QWidget):
         if sb.maximum() > 0:
             target = int(percentage * sb.maximum())
             sb.setValue(target)
+
+    def scroll_to_block(self, chap_idx: int, block_idx: int):
+        """Scroll to a specific block using its HTML anchor ID."""
+        self.browser.scrollToAnchor(f"b{chap_idx}_{block_idx}")
 
     def update_preview(self, doc: PortoDocument):
         """Re-render the entire document based on current state."""

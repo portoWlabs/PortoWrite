@@ -12,9 +12,14 @@ PortoWrite is a distraction-free novel writing app for Windows with a built-in K
 ## Highlights
 
 - **Writer-first EPUB workflow** — create books without fighting EPUB code or complex formatting tools.
-- **Built-in Kindle previewer** — see how your manuscript will look on a Kindle before you export.
+- **Kindle Reader Preview** — side-by-side preview of how your book looks on a Kindle (Paperwhite, Sepia, or Night theme; toggle with Ctrl+P).
+- **Ebook Edit Mode** — constrains the editor to a device-accurate width and applies your Kindle theme colours so you write exactly what readers see.
+- **Focus Mode** — hide all panels and toolbars with F11 for a completely distraction-free writing surface.
 - **Chapter sidebar** — navigate your manuscript with a live multi-level outline.
+- **Chapter Search** — filter box at the top of the Chapter Sidebar to jump to any chapter instantly.
+- **TOC generation** — Insert → Insert Table of Contents to auto-generate a linked TOC from your headings.
 - **Named paragraph styles** — Body, Chapter Title, SubHeader, Block Quote, Code, Scene Break, and more.
+- **Alignment toolbar** — Left, Center, Right, and Justify buttons in the main toolbar.
 - **Export and import** — EPUB 3 (Kindle / Kobo / Apple Books profiles), DOCX, and Markdown.
 - **Find & Replace** — regex, case-sensitive, and whole-word options (Ctrl+F / Ctrl+H).
 - **Offline spell check** — Hunspell engine, contraction-aware, with a personal user dictionary.
@@ -66,6 +71,9 @@ python main.py
 | Ctrl+H | Find & Replace |
 | Ctrl+Shift+Return | Insert Scene Break |
 | Ctrl+Enter | Insert Page Break |
+| Ctrl+P | Toggle Reader Preview |
+| F11 | Focus Mode |
+| Ctrl+0 | Reset Zoom |
 | F1 | User Guide |
 | Ctrl+Scroll | Zoom editor |
 
@@ -77,7 +85,7 @@ Free for personal, non-commercial use. See [LICENSE.txt](LICENSE.txt) for full t
 
 - Personal use is free — no sign-up, no time limit.
 - Commercial use (within a business, for clients, or in any revenue-generating context) requires a separate licence.
-- Contact portowlabs@gmail.com for commercial licensing.
+- Contact portowrite@portowlabs.com for commercial licensing.
 
 ---
 

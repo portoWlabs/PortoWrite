@@ -44,6 +44,9 @@ class AppSettings:
     # App Theme (F9)
     app_theme: str = "System"
 
+    # Update check
+    check_updates_on_startup: bool = True
+
     def load(self) -> "AppSettings":
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -80,6 +83,7 @@ class AppSettings:
             self.ebook_margin         = int(data.get("ebook_margin", self.ebook_margin))
             self.ebook_cpl            = int(data.get("ebook_cpl", self.ebook_cpl))
             self.app_theme            = data.get("app_theme", self.app_theme)
+            self.check_updates_on_startup = bool(data.get("check_updates_on_startup", self.check_updates_on_startup))
         except (FileNotFoundError, json.JSONDecodeError, ValueError):
             pass
         logger.debug("Settings loaded")
@@ -120,6 +124,7 @@ class AppSettings:
                     "ebook_margin":         self.ebook_margin,
                     "ebook_cpl":            self.ebook_cpl,
                     "app_theme":            self.app_theme,
+                    "check_updates_on_startup": self.check_updates_on_startup,
                 }, f, indent=2)
             logger.debug("Settings saved")
         except Exception as exc:

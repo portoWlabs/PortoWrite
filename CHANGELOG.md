@@ -12,16 +12,22 @@ All notable changes to PortoWrite are documented here.
 - **Version Snapshots**: File > Versions > Save Snapshot captures a named point-in-time snapshot; File > Versions > Version History lists all snapshots with restore and delete options
 - **Help / User Guide**: Help > User Guide (F1) opens a five-tab guide covering Getting Started, Writing, Styles, Exporting, and Backups & Versions
 - **App icon**: PortoWrite now has a custom icon (navy book with quill); appears in the taskbar, window title bar, and installer
+- **Performance Optimizations**: Ebook mode toggling and reading setting adjustments are now up to 100x faster on large novels by batching layout recalculations
+- **App Theme**: View > App Theme allows switching between Light, Dark, and System Default modes; custom high-contrast palettes applied app-wide
 
 ### Improvements
 - Toolbar alignment buttons (Left / Center / Right / Justify) added
 - Display Preferences toggle shows tooltip; setting persists correctly across sessions
 - Import handlers are format-aware — Markdown and Word import are disabled on the Free tier
+- Chapter Sidebar contrast improved for secondary headings in both Light and Dark modes
+- Editor background in Ebook Mode now correctly matches the selected reading theme (Paperwhite/Sepia)
 
 ### Bug Fixes
 - Fixed title not appearing in EPUB metadata after Save As (clone)
 - Fixed margin label showing "M" instead of the configured value in the Kindle Preview toolbar
 - Fixed duplicate page-break indicators appearing in the editor
+- Fixed a crash on launch caused by a missing color definition in the sidebar
+- Fixed console warnings regarding active painters in the ebook frame
 
 ---
 
@@ -97,5 +103,5 @@ Initial public beta release.
 ### Licensing
 - Free during beta — all features available to all users
 - Supporter tier: Ko-fi donation removes the beta nag and shows a Supporter badge
-- Commercial tier: for business or revenue-generating use — contact portowlabs@gmail.com
+- Commercial tier: for business or revenue-generating use — contact portowrite@portowlabs.com
 - Help > Enter Licence Key to activate

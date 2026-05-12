@@ -217,8 +217,20 @@ class NovelProject:
         """Load autosave.json as a PortoDocument (does not replace self.doc)."""
         with open(self.autosave_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        doc, _ = document_from_dict(data)
+        doc, _ = dict_to_document(data)
         return doc
+
+    def get_autosave_metadata(self) -> dict:
+        """Return metadata about the autosave file (timestamp, etc.)."""
+        if not self.has_autosave():
+            return {}
+        stat = os.stat(self.autosave_path)
+        mtime = datetime.fromtimestamp(stat.st_mtime)
+        return {
+            "mtime": mtime,
+            "mtime_str": mtime.strftime("%Y-%m-%d %H:%M:%S"),
+            "size_bytes": stat.st_size
+        }
 
     def delete_autosave(self) -> None:
         if os.path.exists(self.autosave_path):

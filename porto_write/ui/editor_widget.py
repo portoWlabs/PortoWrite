@@ -6,10 +6,10 @@ from PySide6.QtWidgets import QTextEdit, QMenu, QApplication
 from PySide6.QtGui import (
     QTextCursor, QTextBlockFormat, QTextCharFormat,
     QFont, QAction, QKeySequence,
-    QTextFrameFormat, QTextDocument
+    QTextFrameFormat, QTextDocument, QColor
 )
 from PySide6.QtCore import Signal, Qt, QRegularExpression, QMimeData, QTimer
-from porto_write.constants import STYLE_NAME_PROPERTY, DROP_CAP_PROPERTY
+from porto_write.constants import STYLE_NAME_PROPERTY, DROP_CAP_PROPERTY, PAGE_BREAK_PROPERTY
 from porto_write.document import PortoDocument, TextBlock, Chapter
 from porto_write.styles import StyleDefinition
 from porto_write.ui.spell_highlighter import SpellCheckHighlighter
@@ -62,6 +62,15 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
         self._style_timer.setInterval(200)
         self._style_timer.timeout.connect(self.refresh_styling)
 
+        # Fix 1: Re-run page-break indicators after every document edit so they
+        # survive user typing. contentsChange fires with (position, removed, added)
+        # args; a debounced timer avoids per-keystroke overhead.
+        self._page_break_timer = QTimer(self)
+        self._page_break_timer.setSingleShot(True)
+        self._page_break_timer.setInterval(100)
+        self._page_break_timer.timeout.connect(self._update_page_break_indicators)
+        self.document().contentsChange.connect(self._on_contents_change)
+
         self.cursorPositionChanged.connect(self._check_active_chapter)
 
     def set_spell_checker(self, spell_checker):
@@ -79,6 +88,10 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
         """Set a temporary line-height multiplier for ebook mode; None restores normal spacing."""
         self._display_line_height_override = value
         self.refresh_styling()
+
+    def _on_contents_change(self, _position: int, _removed: int, _added: int):
+        """Slot for QTextDocument.contentsChange — re-schedules page-break indicator refresh."""
+        self._page_break_timer.start()
 
     def _check_active_chapter(self):
         """Emit active_chapter_changed signal if the cursor has moved into a different chapter."""
@@ -421,6 +434,9 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
         cursor.setPosition(curr_pos)
         self.setTextCursor(cursor)
 
+        # Update page-break visual indicators
+        self._update_page_break_indicators()
+
     def set_max_content_width(self, width_chars: int | None):
         self._max_content_width = width_chars
         self._update_layout()
@@ -438,31 +454,46 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
     def set_ebook_mode(self, enabled: bool, profile: dict):
         """Toggle device-accurate writing frame. Caller is responsible for restoring palette/margins on disable."""
         self._ebook_mode = enabled
-        
+
         if enabled:
+            # Save current state for restoration
+            self._saved_margins = (self._user_margin_left, self._user_margin_right)
+            self._saved_max_width = self._max_content_width
+            logger.debug(f"[EBOOK ON] Saved margins: {self._saved_margins}, saved width: {self._saved_max_width}")
+
             # Performance: set fields directly to avoid redundant _update_layout() calls
             self._max_content_width = profile.get("content_width_chars")
             self._user_margin_left, self._user_margin_right = profile.get("margins", (40, 40))
+            logger.debug(f"[EBOOK ON] Applied ebook margins: L={self._user_margin_left}, R={self._user_margin_right}, width={self._max_content_width}")
 
             self.setViewportMargins(60, 20, 60, 60)
         else:
-            self._max_content_width = None
-            self._user_margin_left = 0
-            self._user_margin_right = 0
+            # Restore saved state
+            if hasattr(self, "_saved_margins"):
+                self._user_margin_left, self._user_margin_right = self._saved_margins
+                logger.debug(f"[EBOOK OFF] Restored margins from save: {self._saved_margins}")
+            if hasattr(self, "_saved_max_width"):
+                self._max_content_width = self._saved_max_width
+                logger.debug(f"[EBOOK OFF] Restored width from save: {self._saved_max_width}")
 
             self.setViewportMargins(0, 0, 0, 0)
+            logger.debug(f"[EBOOK OFF] Reset viewport margins to 0,0,0,0")
             self.viewport().setPalette(self.style().standardPalette())
-        
+
         if self.highlighter:
             self.highlighter.set_ebook_mode(enabled)
-            
+
+        logger.debug(f"[EBOOK MODE] Calling _update_layout(), _suppress_refresh={self._suppress_refresh}")
         self._update_layout()
 
     def _update_layout(self):
+        logger.debug(f"[_UPDATE_LAYOUT] Called. suppress_refresh={self._suppress_refresh}, user_margins=({self._user_margin_left}, {self._user_margin_right})")
         if self._suppress_refresh:
+            logger.debug(f"[_UPDATE_LAYOUT] Returning early - refresh suppressed")
             return
         left = self._user_margin_left
         right = self._user_margin_right
+        logger.debug(f"[_UPDATE_LAYOUT] Starting with user margins: L={left}, R={right}")
 
         # Calculate character-width based margins if enabled
         if self._text_margin_chars > 0:
@@ -503,10 +534,16 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
 
         doc = self.document()
         fmt = doc.rootFrame().frameFormat()
+        old_left = fmt.leftMargin()
+        old_right = fmt.rightMargin()
+        logger.debug(f"[_UPDATE_LAYOUT] Document root frame current margins: L={old_left}, R={old_right}, target: L={left}, R={right}")
         if fmt.leftMargin() != left or fmt.rightMargin() != right:
             fmt.setLeftMargin(left)
             fmt.setRightMargin(right)
             doc.rootFrame().setFrameFormat(fmt)
+            logger.debug(f"[_UPDATE_LAYOUT] ✓ Applied new margins to document root frame")
+        else:
+            logger.debug(f"[_UPDATE_LAYOUT] Margins unchanged, no update needed")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -598,6 +635,7 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
 
         self._update_stats()
         self._update_layout()
+        self._update_page_break_indicators()
         logger.debug("Document loaded.")
 
     def scroll_to_chapter(self, index: int):
@@ -678,6 +716,10 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
         elif style.page_break_before or style.name == "ChapterHeader":
             fmt.setTopMargin(max(style.space_before, 40) * dpi_scale)
 
+        # Tag blocks with page-break-before for visual indicator
+        if style.page_break_before or style.name == "PageBreak":
+            fmt.setProperty(PAGE_BREAK_PROPERTY, True)
+
         if style.name == "Body":
             suppress = ("ChapterHeader", "Heading1", "Heading2", "SubHeader", "SceneBreak", "PageBreak")
             if prev_style_name in suppress:
@@ -687,13 +729,39 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
 
         return fmt
 
+    def _is_page_break_block(self, block) -> bool:
+        """Check if a block has page-break-before styling."""
+        # Fix 2: Wrap with bool() to coerce QVariant quirks (None, 0, False) to
+        # a consistent Python bool rather than a truthy-but-typed QVariant.
+        return bool(block.blockFormat().property(PAGE_BREAK_PROPERTY))
+
+    def _update_page_break_indicators(self):
+        """Update extraSelections to highlight blocks with page-break-before styling."""
+        selections = []
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor(240, 245, 250))  # Very subtle blue tint
+
+        block = self.document().begin()
+        while block.isValid():
+            if self._is_page_break_block(block):
+                cursor = QTextCursor(block)
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                selection = QTextEdit.ExtraSelection()
+                selection.cursor = cursor
+                selection.format = fmt
+                selections.append(selection)
+
+            block = block.next()
+
+        self.setExtraSelections(selections)
+
     def _style_to_char_format(self, style: StyleDefinition) -> QTextCharFormat:
         fmt = QTextCharFormat()
         _MONOSPACE_STYLES = {"Code"}
         use_override = self._display_font_override and style.name not in _MONOSPACE_STYLES
         font_family = self._display_font_override if use_override else style.font_family
         fmt.setFontFamily(font_family)
-        fmt.setFontPointSize(style.font_size * self._zoom_factor)
+        fmt.setFontPointSize(max(1.0, style.font_size * self._zoom_factor))
         
         # Specialized Ebook Mode handling for PageBreak
         if style.name == "PageBreak" and self._ebook_mode:
@@ -757,6 +825,7 @@ class EditorWidget(FindReplaceMixin, QTextEdit):
         cursor.endEditBlock()
         self.setTextCursor(self.textCursor())
         self._update_stats()
+        self._update_page_break_indicators()
 
     def sync_to_document(self, doc: PortoDocument):
         doc.chapters = []

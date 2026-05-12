@@ -18,7 +18,7 @@ class SpellChecker:
         """Load the primary Hunspell dictionary files."""
         aff_path = os.path.join(DICTIONARIES_DIR, "en_US.aff")
         dic_path = os.path.join(DICTIONARIES_DIR, "en_US.dic")
-        
+
         try:
             # spylls expects the .dic and .aff file content or paths
             # According to spylls docs, Dictionary.from_files is a common way
@@ -46,18 +46,23 @@ class SpellChecker:
         """Check if a word is spelled correctly."""
         if not self.dict:
             return True # Fail-safe: assume correct if dict missing
-            
+
         # Clean word (remove surrounding punctuation if any)
-        # In a real editor, the tokenizer should handle this, 
+        # In a real editor, the tokenizer should handle this,
         # but we'll do a basic strip here for safety.
         clean_word = word.strip(".,!?;:\"()[]{}")
         if not clean_word:
             return True
-            
+
+        # Normalize apostrophes: handle both straight (') and smart quotes (')
+        # Qt's rich text mode converts straight apostrophes to U+2019 (right single quotation mark)
+        # The dictionary uses straight apostrophes, so we normalize to match
+        clean_word = clean_word.replace('’', "'")
+
         # 1. Check user dictionary
         if clean_word in self.user_words:
             return True
-            
+
         # 2. Check main dictionary
         try:
             return self.dict.lookup(clean_word)
@@ -69,8 +74,10 @@ class SpellChecker:
         """Get spelling suggestions for a misspelled word."""
         if not self.dict:
             return []
-            
+
         clean_word = word.strip(".,!?;:\"()[]{}")
+        # Normalize apostrophes (same as check() method)
+        clean_word = clean_word.replace('’', "'")
         try:
             return list(self.dict.suggest(clean_word))
         except Exception as e:
@@ -80,6 +87,8 @@ class SpellChecker:
     def add_to_user_dict(self, word: str):
         """Permanently add a word to the user dictionary."""
         clean_word = word.strip(".,!?;:\"()[]{}")
+        # Normalize apostrophes (same as check() method)
+        clean_word = clean_word.replace('’', "'")
         if clean_word and clean_word not in self.user_words:
             self.user_words.add(clean_word)
             try:

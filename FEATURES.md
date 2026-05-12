@@ -42,6 +42,7 @@
 | Word/character count | Live count in status bar, updated on every keystroke; formatted with commas |
 | Active typing timer | Tracks session writing time; persisted to project metadata on close |
 | Cursor restore | Cursor position saved on close, restored on next open |
+| Focus Mode | View > Focus Mode (F11) — hides all docks and toolbars for an empty writing surface |
 
 ---
 
@@ -67,6 +68,8 @@
 | Multi-level sidebar | Level 1: ChapterHeader / Heading1 — bold. Level 2: SubHeader / Heading2 — indented, italic, grey |
 | Navigation | Click chapter item to jump to that location in the editor |
 | Live refresh | Sidebar updates as you type/change styles |
+| Chapter Search | Filter box at the top of the sidebar to quickly find chapters by title |
+| Active tracking | Sidebar selection automatically updates to highlight the chapter containing the cursor |
 
 ---
 
@@ -127,7 +130,7 @@
 
 | Feature | Detail |
 |---------|--------|
-| User Guide | Help > User Guide (F1) — five-tab guide: Getting Started, Writing, Styles, Exporting, Backups & Versions |
+| User Guide | Help > User Guide (F1) — six-tab guide: Getting Started, Writing, View & Focus, Styles, Exporting, Backups & Versions |
 | About | Help > About PortoWrite |
 | Enter Licence Key | Help > Enter Licence Key |
 
@@ -153,6 +156,18 @@
 | Portable install | All app data (settings, user dictionary) stored in the install folder alongside the exe |
 | Settings persistence | Preferences saved across sessions |
 | Logging | Configurable log level (none / light / detailed) |
+
+---
+
+## 12. Ebook Edit Mode
+
+| Feature | Detail |
+|---------|--------|
+| Toggle mode | Switch between standard layout and device-accurate view via View menu or Toolbar |
+| Device frame | Editor adopts Kindle-style width and margins |
+| Theme sync | Editor matches current Kindle Preview theme (Paperwhite, Sepia, Night) |
+| Accurate sync | Block-level scroll synchronization between Editor and Reader Preview |
+| Page Break divider | Page breaks render as visual divider bars in the writing area |
 
 > **Disclaimer:** PortoWrite is beta software provided as-is. The author is not responsible for any loss of work or data. Always keep independent backups of your writing.
 

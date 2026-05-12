@@ -16,7 +16,8 @@ class DisplayPreferencesDialog(QDialog):
 
     def __init__(self, parent, current_font, current_font_size, current_text_color, current_bg_color,
                  current_m_left, current_m_right, text_margin_chars, dynamic_enabled, max_width_chars,
-                 show_beta_warning, beta_warning_initials, projects_dir, tooltips_enabled):
+                 show_beta_warning, beta_warning_initials, projects_dir, tooltips_enabled,
+                 check_updates_on_startup=True):
         super().__init__(parent)
         self.setWindowTitle("Display Preferences")
         self.setMinimumWidth(450)
@@ -34,7 +35,8 @@ class DisplayPreferencesDialog(QDialog):
         self.beta_initials = beta_warning_initials
         self.projects_dir = projects_dir
         self.tooltips_enabled = tooltips_enabled
-        
+        self.check_updates_on_startup = check_updates_on_startup
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -142,7 +144,13 @@ class DisplayPreferencesDialog(QDialog):
         self.tooltips_cb.setChecked(self.tooltips_enabled)
         self.tooltips_cb.setToolTip("Show helpful explanations when hovering over menus and buttons.")
         form.addRow(self.tooltips_cb)
-        
+
+        # 8. Update check
+        self.updates_cb = QCheckBox("Check for updates on startup")
+        self.updates_cb.setChecked(self.check_updates_on_startup)
+        self.updates_cb.setToolTip("Silently check GitHub for a newer version when the app starts.")
+        form.addRow(self.updates_cb)
+
         layout.addLayout(form)
         
         # Buttons
@@ -208,5 +216,6 @@ class DisplayPreferencesDialog(QDialog):
             "show_beta_warning": self.show_beta_warning,
             "beta_warning_initials": self.beta_initials,
             "projects_dir": self.projects_dir,
-            "tooltips_enabled": self.tooltips_cb.isChecked()
+            "tooltips_enabled": self.tooltips_cb.isChecked(),
+            "check_updates_on_startup": self.updates_cb.isChecked(),
         }

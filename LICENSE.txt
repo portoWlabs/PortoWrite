@@ -1,6 +1,6 @@
 PortoWrite — Software Licence
 =============================
-Copyright (c) 2026 Porto Labs (portowlabs@gmail.com)
+Copyright (c) 2026 Porto Labs (portowrite@portowlabs.com)
 All rights reserved.
 
 -------------------------------------------------------------------------------
@@ -33,7 +33,7 @@ within a business, organisation, or any revenue-generating context, including
 use in work performed for clients, customers, or employers.
 
 To obtain a commercial licence, contact:
-portowlabs@gmail.com
+portowrite@portowlabs.com
 
 Each commercial licence is issued to a named individual or organisation and is
 non-transferable without written permission.

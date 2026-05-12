@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class Edition(str, Enum):
     FREE       = "free"
     SUPPORTER  = "supporter"   # Ko-fi donation — personal use
-    COMMERCIAL = "commercial"  # $75/user — commercial use
+    COMMERCIAL = "commercial"  # commercial use
 
 
 PRO_FEATURES: list[str] = [

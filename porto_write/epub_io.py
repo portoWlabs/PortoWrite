@@ -300,15 +300,47 @@ def export_epub(doc: PortoDocument, file_path: str, project_dir: str = None, opt
         epub_chapters.append(epub_chap)
 
     # 4. Structure (EPUB3 format)
-    book.toc = tuple(epub_chapters)
+    # Use Link objects so Kindle shows proper chapter titles in navigation menu
+    book.toc = tuple(
+        epub.Link(chap.file_name, chap.title or f"Chapter {i+1}", chap.id)
+        for i, chap in enumerate(epub_chapters)
+    )
+
+    # Build logical TOC page (front-matter clickable TOC)
+    toc_items = []
+    for i, chapter in enumerate(doc.chapters):
+        title = chapter.title or f"Chapter {i+1}"
+        file_name = f"chap_{i+1}.xhtml"
+        toc_items.append(f'<li><a href="{file_name}">{title}</a></li>')
+
+    toc_html = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<!DOCTYPE html>\n'
+        f'<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="{doc.language}">\n'
+        '<head><title>Table of Contents</title>'
+        '<link rel="stylesheet" href="style/style.css" type="text/css" /></head>\n'
+        '<body>\n'
+        '<h1 class="ChapterHeader">Contents</h1>\n'
+        '<nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops">\n'
+        '<ol>\n'
+        + '\n'.join(toc_items) +
+        '\n</ol>\n</nav>\n</body>\n</html>'
+    )
+    toc_page = epub.EpubHtml(
+        uid='toc_page',
+        title='Table of Contents',
+        file_name='toc.xhtml',
+        lang=doc.language
+    )
+    toc_page.content = toc_html.encode('utf-8')
+    book.add_item(toc_page)
 
     # Add Nav for EPUB3 and include it in spine
     nav = epub.EpubNav()
     book.add_item(nav)
 
-    # Spine: Nav first (required for EPUB3), then chapters
-    # The nav ID is 'nav' by default in ebooklib
-    book.spine = [nav] + epub_chapters
+    # Spine: Nav first (EPUB3 required), then TOC page, then chapters
+    book.spine = [nav, toc_page] + epub_chapters
 
     # 4.5 Add expanded metadata
     _add_document_metadata_to_epub(doc, book)
@@ -489,4 +521,20 @@ def _generate_css(registry: StyleRegistry) -> str:
         "}",
     ])
 
+    return "\n".join(lines)
+
+
+def generate_toc_text(doc: PortoDocument) -> str:
+    """Return a plain-text TOC listing for insertion into the editor.
+
+    Returns a newline-separated string: heading line + one line per chapter.
+    Caller inserts page breaks before/after.
+    """
+    lines = ["Table of Contents", ""]
+    for i, chapter in enumerate(doc.chapters):
+        title = chapter.title or f"Chapter {i+1}"
+        lines.append(title)
+        for block in chapter.blocks:
+            if block.style_name in ("Heading2", "SubHeader") and block.text.strip():
+                lines.append(f"  {block.text.strip()}")
     return "\n".join(lines)

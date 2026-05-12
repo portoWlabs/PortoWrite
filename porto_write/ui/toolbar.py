@@ -79,6 +79,31 @@ class EditorToolbar(QToolBar):
         self.style_combo.setMinimumWidth(150)
         self.addWidget(self.style_combo)
 
+        self.addSeparator()
+
+        # 4. Insert Breaks
+        self.page_break_action = QAction("⏎ Page", self)
+        self.page_break_action.setToolTip("Insert Page Break (Ctrl+Enter)")
+        self.addAction(self.page_break_action)
+
+        self.scene_break_action = QAction("✦ Scene", self)
+        self.scene_break_action.setToolTip("Insert Scene Break")
+        self.addAction(self.scene_break_action)
+
+        self.addSeparator()
+
+        # 5. Preview & Modes
+        self.preview_action = QAction("Preview", self)
+        self.preview_action.setCheckable(True)
+        self.preview_action.setShortcut(QKeySequence("Ctrl+P"))
+        self.preview_action.setToolTip("Show/Hide the Reader Preview (Ctrl+P)")
+        self.addAction(self.preview_action)
+
+        self.ebook_mode_action = QAction("Ebook Mode", self)
+        self.ebook_mode_action.setCheckable(True)
+        self.ebook_mode_action.setToolTip("Toggle Ebook Edit Mode (device-accurate writing)")
+        self.addAction(self.ebook_mode_action)
+
     def refresh_styles(self, names: list[str]):
         """Update the style dropdown list."""
         self.style_combo.clear()

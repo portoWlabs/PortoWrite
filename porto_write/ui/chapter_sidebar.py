@@ -1,6 +1,9 @@
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QStyledItemDelegate, QStyle
-from PySide6.QtCore import Signal, Qt, QRect
-from PySide6.QtGui import QFont, QColor, QPalette
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QLineEdit, QListWidget, QListWidgetItem, 
+    QStyledItemDelegate, QStyle
+)
+from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QFont, QPalette, QColor
 
 class ChapterItemDelegate(QStyledItemDelegate):
     """Custom delegate to handle indentation and styling for multi-level headings."""
@@ -24,20 +27,47 @@ class ChapterItemDelegate(QStyledItemDelegate):
             
             # Change color if not selected
             if not (option.state & QStyle.StateFlag.State_Selected):
-                option.palette.setColor(QPalette.ColorRole.Text, option.palette.color(QPalette.ColorRole.PlaceholderText))
+                # Use a specific dark grey for better contrast in light mode
+                # In dark mode, this role will already be a light grey from the app palette
+                text_color = option.palette.color(QPalette.ColorRole.WindowText)
+                if text_color.lightness() < 128: # Light theme detection
+                    option.palette.setColor(QPalette.ColorRole.Text, QColor("#505050"))
+                else: # Dark theme detection
+                    option.palette.setColor(QPalette.ColorRole.Text, QColor("#b0b0b0"))
 
         super().paint(painter, option, index)
 
-class ChapterSidebar(QListWidget):
-    """Sidebar widget to display and navigate project chapters with multi-level headings."""
+class ChapterSidebar(QWidget):
+    """Sidebar widget to display and navigate project chapters with search filtering."""
     
     chapter_selected = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.setItemDelegate(ChapterItemDelegate(self))
-        self.setStyleSheet("""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # 1. Search Field
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search chapters...")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setStyleSheet("""
+            QLineEdit {
+                border: none;
+                border-bottom: 1px solid rgba(128,128,128,0.3);
+                padding: 8px 12px;
+                background-color: transparent;
+            }
+        """)
+        self.search_edit.textChanged.connect(self._on_search_changed)
+        layout.addWidget(self.search_edit)
+
+        # 2. Chapter List
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.list_widget.setItemDelegate(ChapterItemDelegate(self.list_widget))
+        self.list_widget.setStyleSheet("""
             QListWidget {
                 border: none;
                 background-color: transparent;
@@ -45,35 +75,48 @@ class ChapterSidebar(QListWidget):
             }
             QListWidget::item {
                 padding: 10px 15px;
-                border-bottom: 1px solid rgba(128,128,128,0.2);
+                border-bottom: 1px solid rgba(128,128,128,0.1);
             }
             QListWidget::item:selected {
                 background-color: #3498db;
-                color: white;
+                color: #ffffff;
             }
             QListWidget::item:hover:!selected {
-                background-color: rgba(128,128,128,0.12);
+                background-color: rgba(128,128,128,0.15);
             }
         """)
-        self.itemClicked.connect(self._on_item_clicked)
+        self.list_widget.itemClicked.connect(self._on_item_clicked)
+        layout.addWidget(self.list_widget)
 
     def refresh(self, items: list[tuple[int, str]]):
         """Repopulate the list with the given items (level, title)."""
-        self.blockSignals(True)
-        self.clear()
+        self.list_widget.blockSignals(True)
+        self.list_widget.clear()
         for level, title in items:
             item = QListWidgetItem(title)
             item.setData(Qt.ItemDataRole.UserRole, level)
-            self.addItem(item)
-        self.blockSignals(False)
+            self.list_widget.addItem(item)
+        self.list_widget.blockSignals(False)
+        self._on_search_changed(self.search_edit.text())
 
     def select_chapter(self, index: int):
         """Highlight the chapter at the given index without emitting signals."""
-        if 0 <= index < self.count():
-            self.blockSignals(True)
-            self.setCurrentRow(index)
-            self.blockSignals(False)
+        if 0 <= index < self.list_widget.count():
+            self.list_widget.blockSignals(True)
+            self.list_widget.setCurrentRow(index)
+            self.list_widget.blockSignals(False)
 
     def _on_item_clicked(self, item):
-        index = self.row(item)
+        index = self.list_widget.row(item)
         self.chapter_selected.emit(index)
+
+    def _on_search_changed(self, text: str):
+        search_term = text.lower().strip()
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if not search_term:
+                item.setHidden(False)
+            else:
+                match = search_term in item.text().lower()
+                item.setHidden(not match)
+

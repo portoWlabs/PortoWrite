@@ -545,6 +545,54 @@ def test_spell_contraction():
 
 
 # ---------------------------------------------------------------------------
+# TOC tests (B3, F1, F5)
+# ---------------------------------------------------------------------------
+
+def test_generate_toc_text_basic():
+    from porto_write.document import PortoDocument
+    from porto_write.epub_io import generate_toc_text
+    doc = PortoDocument(title="TOC Text Test")
+    ch = doc.add_chapter("Chapter One")
+    ch.add_block("Body", "Some text.")
+    text = generate_toc_text(doc)
+    if "Table of Contents" not in text:
+        return _fail("generate_toc_text_basic", "Missing 'Table of Contents' header")
+    if "Chapter One" not in text:
+        return _fail("generate_toc_text_basic", "Missing chapter title")
+    return _pass("generate_toc_text_basic")
+
+
+def test_generate_toc_text_subheadings():
+    from porto_write.document import PortoDocument
+    from porto_write.epub_io import generate_toc_text
+    doc = PortoDocument(title="Sub TOC Test")
+    ch = doc.add_chapter("Chapter One")
+    ch.add_block("Heading2", "Part A")
+    ch.add_block("Body", "Content.")
+    text = generate_toc_text(doc)
+    lines = text.split("\n")
+    sub_lines = [l for l in lines if l.startswith("  ")]
+    if not sub_lines:
+        return _fail("generate_toc_text_subheadings", "Sub-heading not indented with 2 spaces")
+    if "Part A" not in sub_lines[0]:
+        return _fail("generate_toc_text_subheadings", "Sub-heading text not found in indented line")
+    return _pass("generate_toc_text_subheadings")
+
+
+def test_toolbar_break_actions():
+    from PySide6.QtWidgets import QApplication
+    from porto_write.ui.toolbar import EditorToolbar
+    import sys
+    app = QApplication.instance() or QApplication(sys.argv)
+    toolbar = EditorToolbar()
+    if not hasattr(toolbar, "page_break_action"):
+        return _fail("toolbar_break_actions", "toolbar missing page_break_action")
+    if not hasattr(toolbar, "scene_break_action"):
+        return _fail("toolbar_break_actions", "toolbar missing scene_break_action")
+    return _pass("toolbar_break_actions")
+
+
+# ---------------------------------------------------------------------------
 # Extended UI tests
 # ---------------------------------------------------------------------------
 
@@ -565,6 +613,65 @@ def test_find_replace():
     if "Hi" not in text:
         return _fail("find_replace", "replace_all did not insert 'Hi'")
     return _pass("find_replace")
+
+
+def test_active_chapter_signal():
+    from PySide6.QtWidgets import QApplication
+    from porto_write.ui.editor_widget import EditorWidget
+    from porto_write.document import PortoDocument
+    from porto_write.constants import STYLE_NAME_PROPERTY
+    import sys
+    app = QApplication.instance() or QApplication(sys.argv)
+    editor = EditorWidget()
+    doc = PortoDocument()
+    ch1 = doc.add_chapter("Chapter 1")
+    ch1.add_block("Body", "Text 1")
+    ch2 = doc.add_chapter("Chapter 2")
+    ch2.add_block("Body", "Text 2")
+    editor.load_document(doc)
+    
+    fired_indices = []
+    editor.active_chapter_changed.connect(lambda idx: fired_indices.append(idx))
+    
+    # Move to block 0 (Chapter 1)
+    cursor = editor.textCursor()
+    cursor.setPosition(0)
+    editor.setTextCursor(cursor)
+    # Trigger check manually if cursorPositionChanged didn't fire in test
+    editor._check_active_chapter()
+    
+    # Move to block 2 (Chapter 2 start)
+    # block 0 = ch1 title, block 1 = ch1 body, block 2 = ch2 title
+    cursor.setPosition(editor.document().findBlockByNumber(2).position())
+    editor.setTextCursor(cursor)
+    editor._check_active_chapter()
+    
+    assert 0 in fired_indices
+    assert 1 in fired_indices
+    return _pass("active_chapter_signal")
+
+
+def test_chapter_sidebar_search():
+    from PySide6.QtWidgets import QApplication
+    from porto_write.ui.chapter_sidebar import ChapterSidebar
+    import sys
+    app = QApplication.instance() or QApplication(sys.argv)
+    sidebar = ChapterSidebar()
+    items = [(1, "Prologue"), (1, "Chapter One"), (2, "Part A")]
+    sidebar.refresh(items)
+    
+    # Filter for 'Prologue'
+    sidebar.search_edit.setText("Prologue")
+    assert not sidebar.list_widget.item(0).isHidden()
+    assert sidebar.list_widget.item(1).isHidden()
+    assert sidebar.list_widget.item(2).isHidden()
+    
+    # Filter for 'One'
+    sidebar.search_edit.setText("One")
+    assert sidebar.list_widget.item(0).isHidden()
+    assert not sidebar.list_widget.item(1).isHidden()
+    
+    return _pass("chapter_sidebar_search")
 
 
 # ---------------------------------------------------------------------------
@@ -626,11 +733,19 @@ SPELL_TESTS = [
     test_spell_contraction,
 ]
 
+TOC_TESTS = [
+    test_generate_toc_text_basic,
+    test_generate_toc_text_subheadings,
+    test_toolbar_break_actions,
+]
+
 UI_TESTS = [
     test_ui_smoke,
     test_editor_sync,
     test_style_application,
     test_find_replace,
+    test_active_chapter_signal,
+    test_chapter_sidebar_search,
 ]
 
 PROJECT_TESTS = [
@@ -646,7 +761,7 @@ LICENSING_TESTS = [
 
 def run_all() -> list[tuple]:
     results = []
-    all_tests = DOCUMENT_TESTS + IO_TESTS + SPELL_TESTS + UI_TESTS + PROJECT_TESTS + LICENSING_TESTS
+    all_tests = DOCUMENT_TESTS + IO_TESTS + SPELL_TESTS + TOC_TESTS + UI_TESTS + PROJECT_TESTS + LICENSING_TESTS
     for test_fn in all_tests:
         try:
             results.append(test_fn())

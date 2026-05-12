@@ -1,4 +1,5 @@
 import logging
+import os
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from porto_write.document import PortoDocument, Chapter, TextBlock
@@ -50,8 +51,11 @@ def import_docx(file_path: str) -> PortoDocument:
     """Import a Word (.docx) file into a PortoDocument."""
     word_doc = Document(file_path)
     
+    _raw_title = (word_doc.core_properties.title or "").strip()
+    _WORD_DEFAULTS = {"Word Document", "Untitled", "Microsoft Word Document", ""}
+    _title = _raw_title if _raw_title not in _WORD_DEFAULTS else os.path.splitext(os.path.basename(file_path))[0]
     doc = PortoDocument(
-        title=word_doc.core_properties.title or "Untitled",
+        title=_title or "Untitled",
         author=word_doc.core_properties.author or ""
     )
     

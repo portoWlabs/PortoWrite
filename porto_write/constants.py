@@ -2,7 +2,7 @@ import os
 import sys
 
 APP_NAME = "PortoWrite"
-APP_VERSION = "0.9.0 Beta"
+APP_VERSION = "0.9.1 Beta"
 
 # Edition controls feature availability. Values: "free" | "pro" | "commercial"
 # Enforcement is not yet implemented — beta ships with all features unlocked.
@@ -37,7 +37,7 @@ os.makedirs(PROJECTS_DIR, exist_ok=True)
 
 DEFAULT_FONT = "Georgia"
 DEFAULT_FONT_SIZE = 12
-DEFAULT_LOG_LEVEL = "light"
+DEFAULT_LOG_LEVEL = "detailed"
 DEFAULT_MAX_BACKUPS = 10
 
 KINDLE_FONTS = [
@@ -63,3 +63,26 @@ SUPPORTED_EXTENSIONS = {
 # Custom QTextFormat property for storing style names
 STYLE_NAME_PROPERTY = 0x1001
 DROP_CAP_PROPERTY = 0x20001
+PAGE_BREAK_PROPERTY = 0x20002
+
+# Device profiles for Ebook Frame Edit Mode (Epic 22)
+# screen_width/height: device screen pixels; ppi: pixels per inch
+# bezel_color: hex string for the frame chrome; corner_radius: px
+DEVICE_PROFILES = {
+    "Kindle Paperwhite": {
+        "screen_width":  758,
+        "screen_height": 1024,
+        "ppi":           167,
+        "bezel_color":   "#1a1a1a",
+        "corner_radius": 8,
+    },
+    "Kobo Libra 2": {
+        "screen_width":  1264,
+        "screen_height": 1680,
+        "ppi":           300,
+        "bezel_color":   "#2b2b2b",
+        "corner_radius": 10,
+    },
+}
+
+DEFAULT_DEVICE = "Kindle Paperwhite"

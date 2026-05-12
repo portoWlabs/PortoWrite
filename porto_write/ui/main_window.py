@@ -25,6 +25,7 @@ from porto_write.ui.kindle_preview import KindlePreviewWidget, KINDLE_THEMES
 from porto_write.ui.ebook_frame import EbookFrameWidget
 from porto_write.licensing import is_pro, is_commercial, get_edition_label, get_edition, Edition, deactivate_licence
 
+from porto_write.ui.update_dialog import UpdateWorker, show_update_result
 from porto_write.ui.project_mixin import ProjectActionsMixin
 from porto_write.ui.export_mixin import ExportImportMixin
 from porto_write.ui.preview_mixin import PreviewMixin
@@ -89,6 +90,7 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
         # Connect signals
         self.editor.textChanged.connect(self._on_text_changed)
         self.editor.verticalScrollBar().valueChanged.connect(self._sync_preview_scroll)
+        self.editor.cursorPositionChanged.connect(self._sync_preview_scroll)
         self.editor.zoom_changed.connect(self._on_zoom_changed)
         self.editor.stats_changed.connect(self._update_stats_display)
         self.editor.structure_changed.connect(self._on_structure_changed)
@@ -145,6 +147,11 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
             # Synchronize internal steps in widget
             self.editor.set_zoom_steps(self.settings.zoom_steps)
 
+        self._update_worker = None
+
+        if self.settings.check_updates_on_startup:
+            QTimer.singleShot(1500, self._startup_update_check)
+
         logger.debug("MainWindow initialized for project: %s", self.project.name)
 
     def _update_title(self):
@@ -189,6 +196,7 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
         else:
             self.editor.set_max_content_width(None)
 
+        logger.debug(f"[DISPLAY PREFS] Setting margins from settings: L={self.settings.editor_margin_left}, R={self.settings.editor_margin_right}")
         self.editor.set_visual_margins(self.settings.editor_margin_left, self.settings.editor_margin_right)
         self.editor.set_text_margin_chars(self.settings.text_margin_chars)
 
@@ -314,7 +322,8 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
             self.settings.show_beta_warning,
             self.settings.beta_warning_initials,
             self.settings.projects_dir,
-            self.settings.tooltips_enabled
+            self.settings.tooltips_enabled,
+            self.settings.check_updates_on_startup,
         )
         if dlg.exec() == QDialog.Accepted:
             data = dlg.get_data()
@@ -331,6 +340,7 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
             self.settings.beta_warning_initials = data["beta_warning_initials"]
             self.settings.projects_dir = data["projects_dir"]
             self.settings.tooltips_enabled = data["tooltips_enabled"]
+            self.settings.check_updates_on_startup = data.get("check_updates_on_startup", True)
             self.settings.save()
             self._apply_display_preferences()
             self._apply_tooltips_preference()
@@ -543,8 +553,8 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
 
         help_menu.addSeparator()
 
-        upgrade_action = QAction("Donate / Upgrade to Pro...", self)
-        upgrade_action.setToolTip("Support PortoWrite development with a donation and unlock Pro features like DOCX and Markdown export.")
+        upgrade_action = QAction("Request Commercial License...", self)
+        upgrade_action.setToolTip("Request commercial licensing details by email.")
         upgrade_action.triggered.connect(self._on_upgrade)
         help_menu.addAction(upgrade_action)
 
@@ -558,11 +568,16 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
             deactivate_action.triggered.connect(self._on_deactivate_license)
             help_menu.addAction(deactivate_action)
         
+        self._check_updates_action = QAction("Check for Updates…", self)
+        self._check_updates_action.setToolTip("Check GitHub for a newer version of PortoWrite.")
+        self._check_updates_action.triggered.connect(self._check_for_updates)
+        help_menu.addAction(self._check_updates_action)
+
         help_menu.addSeparator()
 
         bug_action = QAction("Report a Bug...", self)
         bug_action.setToolTip("Something not working right? Let us know so we can fix it.")
-        bug_action.triggered.connect(lambda: QMessageBox.information(self, "Report a Bug", "Please send bug reports to support@portowrite.dev"))
+        bug_action.triggered.connect(lambda: QMessageBox.information(self, "Report a Bug", "Please send bug reports to portowrite@portowlabs.com"))
         help_menu.addAction(bug_action)
 
         # 2. Status Bar
@@ -739,6 +754,96 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
             f"Focus Mode: {'Enabled' if checked else 'Disabled'}", 2000
         )
 
+    def _on_ebook_mode_toggled(self, checked: bool):
+        """Toggle the editor between standard and device-accurate writing modes."""
+        from porto_write.ui.kindle_preview import KINDLE_THEMES
+        from porto_write.constants import DEVICE_PROFILES, DEFAULT_DEVICE
+
+        logger.debug(f"[EBOOK TOGGLE] Starting, checked={checked}")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.editor.setUpdatesEnabled(False)
+        logger.debug(f"[EBOOK TOGGLE] Disabled updates")
+        try:
+            self.ebook_mode_action.setChecked(checked)
+            self.toolbar.ebook_mode_action.setChecked(checked)
+
+            if checked:
+                device_profile = DEVICE_PROFILES.get(self.settings.ebook_device, DEVICE_PROFILES[DEFAULT_DEVICE])
+                self.ebook_frame.activate(device_profile)
+
+                editor_profile = {
+                    "content_width_chars": self.settings.ebook_cpl,
+                    "margins": (self.settings.ebook_margin, self.settings.ebook_margin),
+                }
+                # Batch multiple setting changes into a single refresh
+                self.editor.batch_updates(True)
+                try:
+                    self.editor.set_ebook_mode(True, editor_profile)
+                    self.editor.set_display_line_height_override(self.settings.ebook_line_height)
+                finally:
+                    self.editor.batch_updates(False)
+
+                theme_name = self.settings.ebook_theme
+                theme = KINDLE_THEMES.get(theme_name, KINDLE_THEMES["Paperwhite"])
+                pal = self.editor.palette()
+                pal.setColor(QPalette.ColorRole.Base, QColor(theme["bg"]))
+                pal.setColor(QPalette.ColorRole.Text, QColor(theme["fg"]))
+                self.editor.setPalette(pal)
+                self.editor.viewport().setPalette(pal)
+                self.editor.setStyleSheet(f"QTextEdit {{ background-color: {theme['bg']}; color: {theme['fg']}; }}")
+
+                # Single combined style pass covering line-height + all other ebook setters.
+                self.editor.refresh_styling()
+                # Recalculate layout with new margins/width (batch_updates suppressed it)
+                self.editor._update_layout()
+                # Fix 3a: Re-apply page-break indicators after stylesheet + refresh so
+                # they survive the palette/style change on ebook-mode activation.
+                self.editor._update_page_break_indicators()
+
+                # Initialize UI from settings
+                self.ebook_frame.device_combo.blockSignals(True)
+                self.ebook_frame.device_combo.setCurrentText(self.settings.ebook_device)
+                self.ebook_frame.device_combo.blockSignals(False)
+                self.ebook_frame.theme_combo.setCurrentText(self.settings.ebook_theme)
+                self.ebook_frame.lbl_ls.setText(f"{self.settings.ebook_line_height:.1f}")
+                self.ebook_frame.lbl_m.setText(str(self.settings.ebook_margin))
+                self.ebook_frame.lbl_zoom.setText(str(self.settings.ebook_cpl))
+            else:
+                logger.debug(f"[EBOOK TOGGLE] Exiting ebook mode")
+                self.ebook_frame.deactivate()
+                self.editor.batch_updates(True)
+                logger.debug(f"[EBOOK TOGGLE] Enabled batch updates")
+                try:
+                    self.editor.set_ebook_mode(False, {})
+                    self.editor.set_display_line_height_override(None)
+                    self.editor.setStyleSheet("")
+                    self._apply_display_preferences()
+                finally:
+                    self.editor.batch_updates(False)
+                    logger.debug(f"[EBOOK TOGGLE] Disabled batch updates")
+
+                # Single pass to restore standard styling
+                logger.debug(f"[EBOOK TOGGLE] Calling refresh_styling()")
+                self.editor.refresh_styling()
+                # Recalculate layout with restored margins (batch_updates suppressed it)
+                logger.debug(f"[EBOOK TOGGLE] Calling _update_layout()")
+                self.editor._update_layout()
+                # Fix 3a (off branch): Re-apply indicators after standard styling restore.
+                logger.debug(f"[EBOOK TOGGLE] Calling _update_page_break_indicators()")
+                self.editor._update_page_break_indicators()
+
+            self.statusBar().showMessage(
+                f"Ebook Edit Mode: {'Enabled' if checked else 'Disabled'}", 3000
+            )
+        finally:
+            logger.debug(f"[EBOOK TOGGLE] Re-enabling updates and forcing repaint")
+            self.editor.setUpdatesEnabled(True)
+            # Fix 3b: Force Qt to repaint stale pixels after re-enabling updates.
+            self.editor.viewport().update()
+            self.editor.update()
+            logger.debug(f"[EBOOK TOGGLE] Complete")
+            QApplication.restoreOverrideCursor()
+
     def _on_log_level_changed(self):
         action = self.sender()
         if action and action.isChecked():
@@ -870,4 +975,28 @@ class MainWindow(ProjectActionsMixin, ExportImportMixin, PreviewMixin, StyleMixi
                 self, "Licence Deactivated",
                 "Licence deactivated. Restart PortoWrite to apply."
             )
+
+    def _check_for_updates(self) -> None:
+        if self._update_worker is not None:
+            return
+        self._check_updates_action.setEnabled(False)
+        self._update_worker = UpdateWorker()
+        self._update_worker.finished.connect(self._on_update_result)
+        self._update_worker.start()
+
+    def _on_update_result(self, result) -> None:
+        self._check_updates_action.setEnabled(True)
+        self._update_worker = None
+        show_update_result(self, result, silent_if_current=False)
+
+    def _startup_update_check(self) -> None:
+        if self._update_worker is not None:
+            return
+        self._update_worker = UpdateWorker()
+        self._update_worker.finished.connect(self._on_startup_update_result)
+        self._update_worker.start()
+
+    def _on_startup_update_result(self, result) -> None:
+        self._update_worker = None
+        show_update_result(self, result, silent_if_current=True)
 
