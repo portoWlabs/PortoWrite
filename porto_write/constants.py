@@ -1,7 +1,7 @@
 import os
 import sys
 
-APP_NAME = "PortoWrite"
+APP_NAME = "portoWrite"
 APP_VERSION = "0.9.1 Beta"
 
 # Edition controls feature availability. Values: "free" | "pro" | "commercial"

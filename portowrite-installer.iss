@@ -1,12 +1,12 @@
 [Setup]
-AppName=PortoWrite
+AppName=portoWrite
 AppVersion=0.9.1 Beta
 AppId={{A3F2C1D8-7E4B-4A9F-B6C3-2D5E8F1A0B7C}
 AppPublisher=portoWlabs
 AppPublisherURL=https://ko-fi.com/portowlabs
 AppSupportURL=mailto:portowrite@portowlabs.com
 DefaultDirName={autopf}\PortoWrite
-DefaultGroupName=PortoWrite
+DefaultGroupName=portoWrite
 OutputBaseFilename=PortoWrite-setup
 OutputDir=Output
 Compression=lzma2
