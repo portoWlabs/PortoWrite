@@ -46,3 +46,15 @@ temp_*
 # OS
 Thumbs.db
 .DS_Store
+
+# Backup files
+*.bak
+
+# Build output
+Output/
+
+# Agent/session artifacts
+agent/
+archive/
+specs/
+startup.md
